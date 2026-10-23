@@ -160,6 +160,8 @@ pub struct AppConfig {
     pub show_hidden_files: bool,
     #[serde(default)]
     pub show_system_files: bool,
+    #[serde(default = "default_true")]
+    pub show_locked_folders: bool,
     #[serde(default)]
     pub quick_search_mode: QuickSearchMode,
     #[serde(default)]
@@ -178,6 +180,7 @@ impl Default for AppConfig {
             usage_basis: UsageBasis::Folder,
             show_hidden_files: false,
             show_system_files: false,
+            show_locked_folders: true,
             quick_search_mode: QuickSearchMode::JumpToPrefix,
             theme: AppTheme::Dark,
         }

@@ -335,7 +335,9 @@ fn process_single_entry(
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                    access_denied = true;
+                    if current_dir == path {
+                        access_denied = true;
+                    }
                 }
                 Err(_) => {}
             }

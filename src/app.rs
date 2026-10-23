@@ -118,6 +118,7 @@ pub struct FreeDataDietApp {
     active_context_menu: Option<ActiveContextMenu>,
     show_settings_modal: bool,
     show_shortcuts_modal: bool,
+    shortcuts_just_opened: bool,
     is_admin: bool,
 }
 
@@ -169,6 +170,7 @@ impl FreeDataDietApp {
             active_context_menu: None,
             show_settings_modal: false,
             show_shortcuts_modal: false,
+            shortcuts_just_opened: false,
             is_admin,
         };
 
@@ -505,7 +507,17 @@ impl eframe::App for FreeDataDietApp {
             ui.ctx().request_repaint();
         }
 
-        // Global Shortcuts for Hidden & System Files, Settings, Shortcuts Help
+        // Global F1 / ? shortcut for Shortcuts Help (always active everywhere)
+        let f1_pressed = ui.input(|i| {
+            i.key_pressed(egui::Key::F1)
+                || (i.modifiers.shift && i.key_pressed(egui::Key::Slash) && !ui.ctx().egui_wants_keyboard_input())
+        });
+        if f1_pressed {
+            self.show_shortcuts_modal = !self.show_shortcuts_modal;
+            self.shortcuts_just_opened = self.show_shortcuts_modal;
+        }
+
+        // Global Shortcuts for Hidden & System Files, Settings
         if !ui.ctx().egui_wants_keyboard_input()
             && self.delete_modal == DeleteConfirmState::None
             && self.active_context_menu.is_none()
@@ -518,11 +530,8 @@ impl eframe::App for FreeDataDietApp {
             let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
             let comma_pressed = ui.input(|i| i.key_pressed(egui::Key::Comma));
             let s_pressed = ui.input(|i| i.key_pressed(egui::Key::S));
-            let f1_pressed = ui.input(|i| i.key_pressed(egui::Key::F1) || (shift && i.key_pressed(egui::Key::Slash)));
 
-            if f1_pressed {
-                self.show_shortcuts_modal = !self.show_shortcuts_modal;
-            } else if (ctrl && comma_pressed) || (alt && s_pressed) {
+            if (ctrl && comma_pressed) || (alt && s_pressed) {
                 self.show_settings_modal = !self.show_settings_modal;
             } else if ctrl && shift && h_pressed {
                 self.config.show_system_files = !self.config.show_system_files;
@@ -1102,6 +1111,9 @@ impl eframe::App for FreeDataDietApp {
                         return false;
                     }
                     if !self.config.show_system_files && e.is_system_protected {
+                        return false;
+                    }
+                    if !self.config.show_locked_folders && e.is_access_denied {
                         return false;
                     }
                     if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
@@ -1838,15 +1850,19 @@ impl eframe::App for FreeDataDietApp {
         if self.show_shortcuts_modal {
             let mut close_shortcuts = false;
 
-            // "goes away when you click any button" - any key press or Esc/Enter closes it
-            ui.input(|i| {
-                for event in &i.events {
-                    if matches!(event, egui::Event::Key { pressed: true, .. }) {
-                        close_shortcuts = true;
-                        break;
+            if self.shortcuts_just_opened {
+                self.shortcuts_just_opened = false;
+            } else {
+                // "goes away when you click any button" - any key press or Esc/Enter closes it
+                ui.input(|i| {
+                    for event in &i.events {
+                        if matches!(event, egui::Event::Key { pressed: true, .. }) {
+                            close_shortcuts = true;
+                            break;
+                        }
                     }
-                }
-            });
+                });
+            }
 
             egui::Window::new("Keyboard Shortcuts")
                 .collapsible(false)
@@ -1999,6 +2015,10 @@ impl eframe::App for FreeDataDietApp {
                             self.save_config();
                             self.sort_entries();
                         }
+                        if ui.checkbox(&mut self.config.show_locked_folders, "Show Locked Folders").on_hover_text("Show folders that cannot be scanned due to permission restrictions").changed() {
+                            self.save_config();
+                            self.sort_entries();
+                        }
 
                         ui.add_space(6.0);
                         ui.separator();
@@ -2044,6 +2064,7 @@ impl eframe::App for FreeDataDietApp {
                         // 7. Shortcuts Sheet
                         if ui.button("View Keyboard Shortcuts (F1)").clicked() {
                             self.show_shortcuts_modal = true;
+                            self.shortcuts_just_opened = true;
                         }
                     });
 
