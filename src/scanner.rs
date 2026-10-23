@@ -19,7 +19,8 @@ pub struct ScanSummary {
 
 pub enum ScanMessage {
     Progress { scanned_items: usize },
-    EntryReady(FileEntry),
+    InitialEntries(Vec<FileEntry>),
+    EntryUpdated(FileEntry),
     Completed(ScanSummary),
     Failed(String),
 }
@@ -59,17 +60,56 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
             }
         };
 
-        // Collect direct children
+        // Collect direct children and send immediate initial snapshot
         let mut child_paths = Vec::new();
+        let mut initial_entries = Vec::new();
+        let mut total_size = 0u64;
+        let mut total_allocated = 0u64;
+        let mut total_files = 0usize;
+
         for entry_res in entries_dir {
             if cancel_clone.load(Ordering::Relaxed) {
                 return;
             }
             if let Ok(entry) = entry_res {
                 let name = entry.file_name().to_string_lossy().to_string();
-                child_paths.push((entry.path(), name));
+                let path = entry.path();
+                let meta_opt = fs::symlink_metadata(&path).ok();
+                let is_dir = meta_opt.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                let modified = meta_opt.as_ref().and_then(|m| m.modified().ok());
+
+                let (size, allocated, is_scanning) = if !is_dir {
+                    let s = meta_opt.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let a = get_allocated_size(&path, s);
+                    total_size += s;
+                    total_allocated += a;
+                    total_files += 1;
+                    (s, a, false)
+                } else {
+                    (0, 0, true)
+                };
+
+                let mut item = FileEntry::new(
+                    name.clone(),
+                    path.clone(),
+                    is_dir,
+                    size,
+                    allocated,
+                    modified,
+                    if is_dir { 0 } else { 1 },
+                    false,
+                );
+                item.is_scanning = is_scanning;
+                initial_entries.push(item);
+
+                if is_dir {
+                    child_paths.push((path, name));
+                }
             }
         }
+
+        // Send all discovered entries immediately so UI shows folders without delay!
+        let _ = tx.send(ScanMessage::InitialEntries(initial_entries));
 
         let num_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -109,17 +149,13 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
         }
         drop(worker_tx);
 
-        let mut total_size = 0u64;
-        let mut total_allocated = 0u64;
-        let mut total_files = 0usize;
-
         let mut last_progress_report = Instant::now();
         for entry in worker_rx {
             total_size += entry.size;
             total_allocated += entry.allocated_size;
             total_files += if entry.is_dir { entry.item_count } else { 1 };
 
-            let _ = tx.send(ScanMessage::EntryReady(entry));
+            let _ = tx.send(ScanMessage::EntryUpdated(entry));
 
             if last_progress_report.elapsed() > Duration::from_millis(50) {
                 let count = total_counter.load(Ordering::Relaxed);
@@ -209,6 +245,24 @@ fn process_single_entry(
             false,
         )
     } else {
+        // If this directory is a junction or symlink, skip recursing
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if (metadata.file_attributes() & 0x0000_0400) != 0 || metadata.file_type().is_symlink() {
+                return FileEntry::new(
+                    name.to_string(),
+                    path.to_path_buf(),
+                    true,
+                    0,
+                    0,
+                    modified,
+                    0,
+                    false,
+                );
+            }
+        }
+
         // If this directory itself is excluded, skip walking children
         if matches_exclude(name, excludes) {
             let size = metadata.len();
@@ -257,9 +311,20 @@ fn process_single_entry(
                             if let Ok(meta) = fs::symlink_metadata(&sub_path) {
                                 count += 1;
                                 if meta.is_dir() {
-                                    if !meta.file_type().is_symlink() {
-                                        stack.push(sub_path);
+                                    #[cfg(windows)]
+                                    {
+                                        use std::os::windows::fs::MetadataExt;
+                                        if (meta.file_attributes() & 0x0000_0400) != 0 || meta.file_type().is_symlink() {
+                                            continue;
+                                        }
                                     }
+                                    #[cfg(not(windows))]
+                                    {
+                                        if meta.file_type().is_symlink() {
+                                            continue;
+                                        }
+                                    }
+                                    stack.push(sub_path);
                                 } else {
                                     let fsize = meta.len();
                                     dir_size += fsize;

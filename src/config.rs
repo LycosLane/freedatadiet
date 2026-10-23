@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::model::{SortBy, SortDirection};
+use crate::model::SortDirection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColumnId {
+    Type,
     Name,
     Size,
     AllocatedSize,
@@ -15,6 +16,7 @@ pub enum ColumnId {
 impl ColumnId {
     pub fn all() -> &'static [ColumnId] {
         &[
+            ColumnId::Type,
             ColumnId::Name,
             ColumnId::Size,
             ColumnId::AllocatedSize,
@@ -26,6 +28,7 @@ impl ColumnId {
 
     pub fn default_order() -> Vec<ColumnId> {
         vec![
+            ColumnId::Type,
             ColumnId::Name,
             ColumnId::Size,
             ColumnId::AllocatedSize,
@@ -37,6 +40,7 @@ impl ColumnId {
 
     pub fn title(&self) -> &'static str {
         match self {
+            ColumnId::Type => "Type",
             ColumnId::Name => "Name",
             ColumnId::Size => "Size",
             ColumnId::AllocatedSize => "On Disk",
@@ -48,6 +52,7 @@ impl ColumnId {
 
     pub fn fixed_width(&self) -> f32 {
         match self {
+            ColumnId::Type => 52.0,
             ColumnId::Name => 0.0, // Flexible / remaining space
             ColumnId::Size => 95.0,
             ColumnId::AllocatedSize => 95.0,
@@ -56,17 +61,19 @@ impl ColumnId {
             ColumnId::Modified => 135.0,
         }
     }
+}
 
-    pub fn sort_by(&self) -> Option<SortBy> {
-        match self {
-            ColumnId::Name => Some(SortBy::Name),
-            ColumnId::Size => Some(SortBy::Size),
-            ColumnId::AllocatedSize => Some(SortBy::AllocatedSize),
-            ColumnId::Usage => Some(SortBy::Size),
-            ColumnId::Items => Some(SortBy::ItemCount),
-            ColumnId::Modified => Some(SortBy::Modified),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SortRule {
+    pub column: ColumnId,
+    pub direction: SortDirection,
+}
+
+pub fn default_sort_rules() -> Vec<SortRule> {
+    vec![SortRule {
+        column: ColumnId::Size,
+        direction: SortDirection::Descending,
+    }]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -90,25 +97,30 @@ impl UsageBasis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub column_order: Vec<ColumnId>,
-    pub sort_by: SortBy,
-    pub sort_direction: SortDirection,
+    #[serde(default = "default_sort_rules")]
+    pub sort_rules: Vec<SortRule>,
     pub ignore_dev_caches: bool,
     pub custom_excludes: String,
     pub last_path: Option<PathBuf>,
     #[serde(default)]
     pub usage_basis: UsageBasis,
+    #[serde(default)]
+    pub show_hidden_files: bool,
+    #[serde(default)]
+    pub show_system_files: bool,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             column_order: ColumnId::default_order(),
-            sort_by: SortBy::Size,
-            sort_direction: SortDirection::Descending,
+            sort_rules: default_sort_rules(),
             ignore_dev_caches: true,
             custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
             last_path: None,
             usage_basis: UsageBasis::Folder,
+            show_hidden_files: false,
+            show_system_files: false,
         }
     }
 }
@@ -128,10 +140,16 @@ impl AppConfig {
         if path.exists() {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&contents) {
+                    if !cfg.column_order.contains(&ColumnId::Type) {
+                        cfg.column_order.insert(0, ColumnId::Type);
+                    }
                     for col in ColumnId::all() {
                         if !cfg.column_order.contains(col) {
                             cfg.column_order.push(*col);
                         }
+                    }
+                    if cfg.sort_rules.is_empty() {
+                        cfg.sort_rules = default_sort_rules();
                     }
                     return cfg;
                 }

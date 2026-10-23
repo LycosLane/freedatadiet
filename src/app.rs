@@ -1,10 +1,9 @@
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
 
-use crate::config::{AppConfig, ColumnId, UsageBasis};
-use crate::model::{format_size, DriveInfo, FileEntry, SortBy, SortDirection};
+use crate::config::{AppConfig, ColumnId, SortRule, UsageBasis};
+use crate::model::{format_size, DriveInfo, FileEntry, SortDirection};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
 
@@ -23,10 +22,7 @@ pub struct FreeDataDietApp {
     path_input: String,
     drives: Vec<DriveInfo>,
     entries: Vec<FileEntry>,
-    selected_index: Option<usize>,
-
-    sort_by: SortBy,
-    sort_dir: SortDirection,
+    selected_path: Option<PathBuf>,
 
     // Exclude filters
     ignore_dev_caches: bool,
@@ -40,6 +36,8 @@ pub struct FreeDataDietApp {
     error_message: Option<String>,
 
     delete_modal: DeleteConfirmState,
+    modal_confirm_focused: bool,
+    keyboard_context_menu_open: bool,
     is_admin: bool,
 }
 
@@ -64,8 +62,6 @@ impl FreeDataDietApp {
         };
 
         let mut app = Self {
-            sort_by: config.sort_by,
-            sort_dir: config.sort_direction,
             ignore_dev_caches: config.ignore_dev_caches,
             custom_excludes: config.custom_excludes.clone(),
             config,
@@ -74,7 +70,7 @@ impl FreeDataDietApp {
             current_path: start_path,
             drives,
             entries: Vec::new(),
-            selected_index: None,
+            selected_path: None,
             show_exclude_bar: false,
             scanner: None,
             is_scanning: false,
@@ -82,6 +78,8 @@ impl FreeDataDietApp {
             summary: None,
             error_message: None,
             delete_modal: DeleteConfirmState::None,
+            modal_confirm_focused: true,
+            keyboard_context_menu_open: false,
             is_admin,
         };
 
@@ -90,8 +88,6 @@ impl FreeDataDietApp {
     }
 
     fn save_config(&mut self) {
-        self.config.sort_by = self.sort_by;
-        self.config.sort_direction = self.sort_dir;
         self.config.ignore_dev_caches = self.ignore_dev_caches;
         self.config.custom_excludes = self.custom_excludes.clone();
         self.config.last_path = Some(self.current_path.clone());
@@ -117,7 +113,7 @@ impl FreeDataDietApp {
         }
 
         self.entries.clear();
-        self.selected_index = None;
+        self.selected_path = None;
         self.summary = None;
         self.error_message = None;
         self.is_scanning = true;
@@ -155,13 +151,29 @@ impl FreeDataDietApp {
                 ScanMessage::Progress { scanned_items } => {
                     self.scanned_counter = scanned_items;
                 }
-                ScanMessage::EntryReady(entry) => {
-                    self.entries.push(entry);
+                ScanMessage::InitialEntries(entries) => {
+                    self.entries = entries;
+                    self.sort_entries();
+                }
+                ScanMessage::EntryUpdated(entry) => {
+                    if let Some(existing) = self.entries.iter_mut().find(|e| e.path == entry.path) {
+                        existing.size = entry.size;
+                        existing.allocated_size = entry.allocated_size;
+                        existing.item_count = entry.item_count;
+                        existing.modified = entry.modified;
+                        existing.is_access_denied = entry.is_access_denied;
+                        existing.is_scanning = false;
+                    } else {
+                        self.entries.push(entry);
+                    }
                     self.sort_entries();
                 }
                 ScanMessage::Completed(sum) => {
                     self.summary = Some(sum);
                     self.is_scanning = false;
+                    for e in &mut self.entries {
+                        e.is_scanning = false;
+                    }
                     self.sort_entries();
                 }
                 ScanMessage::Failed(err) => {
@@ -173,42 +185,80 @@ impl FreeDataDietApp {
     }
 
     fn sort_entries(&mut self) {
-        let sort_by = self.sort_by;
-        let sort_dir = self.sort_dir;
+        let rules = self.config.sort_rules.clone();
 
         self.entries.sort_by(|a, b| {
-            let cmp = match sort_by {
-                SortBy::Size => a.size.cmp(&b.size),
-                SortBy::AllocatedSize => a.allocated_size.cmp(&b.allocated_size),
-                SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortBy::Modified => a.modified.cmp(&b.modified),
-                SortBy::ItemCount => a.item_count.cmp(&b.item_count),
-            };
+            for rule in &rules {
+                let cmp = match rule.column {
+                    ColumnId::Type => {
+                        let a_key = get_type_sort_key(a);
+                        let b_key = get_type_sort_key(b);
+                        a_key.cmp(&b_key)
+                    }
+                    ColumnId::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                    ColumnId::Size | ColumnId::Usage => a.size.cmp(&b.size),
+                    ColumnId::AllocatedSize => a.allocated_size.cmp(&b.allocated_size),
+                    ColumnId::Items => a.item_count.cmp(&b.item_count),
+                    ColumnId::Modified => a.modified.cmp(&b.modified),
+                };
 
-            match sort_dir {
-                SortDirection::Ascending => cmp,
-                SortDirection::Descending => cmp.reverse(),
+                let directed = match rule.direction {
+                    SortDirection::Ascending => cmp,
+                    SortDirection::Descending => cmp.reverse(),
+                };
+
+                if directed != std::cmp::Ordering::Equal {
+                    return directed;
+                }
             }
+
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
         });
     }
 
-    fn toggle_sort(&mut self, target: SortBy) {
-        if self.sort_by == target {
-            self.sort_dir = match self.sort_dir {
-                SortDirection::Ascending => SortDirection::Descending,
-                SortDirection::Descending => SortDirection::Ascending,
-            };
+    fn toggle_sort_column(&mut self, col: ColumnId) {
+        if let Some(pos) = self.config.sort_rules.iter().position(|r| r.column == col) {
+            match self.config.sort_rules[pos].direction {
+                SortDirection::Descending => {
+                    self.config.sort_rules[pos].direction = SortDirection::Ascending;
+                }
+                SortDirection::Ascending => {
+                    self.config.sort_rules.remove(pos);
+                }
+            }
         } else {
-            self.sort_by = target;
-            self.sort_dir = SortDirection::Descending;
+            let default_dir = match col {
+                ColumnId::Name | ColumnId::Type => SortDirection::Ascending,
+                _ => SortDirection::Descending,
+            };
+            self.config.sort_rules.push(SortRule {
+                column: col,
+                direction: default_dir,
+            });
         }
         self.sort_entries();
         self.save_config();
     }
 }
 
+fn get_type_sort_key(e: &FileEntry) -> (u8, String) {
+    if e.is_dir {
+        if e.is_reparse_point {
+            (1, e.name.to_lowercase())
+        } else {
+            (0, e.name.to_lowercase())
+        }
+    } else if let Some(ext) = e.path.extension().and_then(|s| s.to_str()) {
+        (2, ext.to_lowercase())
+    } else {
+        (3, e.name.to_lowercase())
+    }
+}
+
 fn get_type_badge(entry: &FileEntry) -> (String, Color32) {
-    if entry.is_system_protected {
+    if entry.is_reparse_point {
+        ("[JUNC]".to_string(), Color32::from_rgb(200, 160, 255))
+    } else if entry.is_system_protected {
         ("[SYS]".to_string(), Color32::from_rgb(255, 175, 40))
     } else if entry.is_access_denied {
         ("[LOCK]".to_string(), Color32::from_rgb(255, 90, 90))
@@ -344,6 +394,13 @@ impl eframe::App for FreeDataDietApp {
                         ui.close();
                     }
                 });
+
+                if ui.checkbox(&mut self.config.show_hidden_files, "Hidden").on_hover_text("Show hidden files and dotfiles").changed() {
+                    self.save_config();
+                }
+                if ui.checkbox(&mut self.config.show_system_files, "System").on_hover_text("Show protected system files and junctions (e.g. Documents and Settings)").changed() {
+                    self.save_config();
+                }
             });
 
             // Exclude Filter Bar
@@ -426,48 +483,59 @@ impl eframe::App for FreeDataDietApp {
                 ui.heading(RichText::new("Item Details").size(16.0));
                 ui.separator();
 
-                if let Some(idx) = self.selected_index {
-                    if let Some(entry) = self.entries.get(idx) {
-                        let (badge, badge_color) = get_type_badge(entry);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(badge).monospace().color(badge_color).strong());
-                            ui.label(RichText::new(&entry.name).strong());
-                        });
-                        ui.add_space(4.0);
+                let selected_entry = self.selected_path.as_ref().and_then(|p| {
+                    self.entries.iter().find(|e| &e.path == p)
+                });
 
-                        egui::Grid::new("detail_grid")
-                            .num_columns(2)
-                            .spacing([8.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.label("Type:");
-                                ui.label(if entry.is_dir { "Folder" } else { "File" });
-                                ui.end_row();
+                if let Some(entry) = selected_entry {
+                    let (badge, badge_color) = get_type_badge(entry);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(badge).monospace().color(badge_color).strong());
+                        ui.label(RichText::new(&entry.name).strong());
+                    });
+                    ui.add_space(4.0);
 
-                                ui.label("File Size:");
+                    egui::Grid::new("detail_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label("Type:");
+                            ui.label(if entry.is_reparse_point { "Junction / Link" } else if entry.is_dir { "Folder" } else { "File" });
+                            ui.end_row();
+
+                            ui.label("File Size:");
+                            if entry.is_scanning {
+                                ui.label(RichText::new("Calculating...").italics().color(Color32::from_rgb(200, 160, 80)));
+                            } else {
                                 ui.label(format_size(entry.size));
-                                ui.end_row();
+                            }
+                            ui.end_row();
 
-                                ui.label("Size on Disk:");
+                            ui.label("Size on Disk:");
+                            if entry.is_scanning {
+                                ui.label(RichText::new("Calculating...").italics().color(Color32::from_rgb(200, 160, 80)));
+                            } else {
                                 ui.label(format_size(entry.allocated_size));
-                                ui.end_row();
+                            }
+                            ui.end_row();
 
-                                if entry.is_dir {
-                                    ui.label("Items Inside:");
+                            if entry.is_dir {
+                                ui.label("Items Inside:");
+                                if entry.is_scanning {
+                                    ui.label("...");
+                                } else {
                                     ui.label(format!("{}", entry.item_count));
-                                    ui.end_row();
                                 }
-
-                                ui.label("Modified:");
-                                let date_str = entry
-                                    .modified
-                                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                                    .map(|d| {
-                                        let secs = d.as_secs();
-                                        format!("{secs}")
-                                    })
-                                    .unwrap_or_else(|| "-".to_string());
-                                ui.label(date_str);
                                 ui.end_row();
+                            }
+
+                            ui.label("Modified:");
+                            let date_str = entry
+                                .modified
+                                .map(crate::model::format_system_time)
+                                .unwrap_or_else(|| "-".to_string());
+                            ui.label(date_str);
+                            ui.end_row();
 
                                 if entry.is_system_protected {
                                     ui.label(RichText::new("Protection:").color(Color32::from_rgb(255, 180, 50)));
@@ -530,6 +598,7 @@ impl eframe::App for FreeDataDietApp {
                                 entry.name.clone(),
                                 entry.is_system_protected,
                             );
+                            self.modal_confirm_focused = true;
                         }
 
                         let perm_btn = ui.button(
@@ -542,8 +611,8 @@ impl eframe::App for FreeDataDietApp {
                                 entry.name.clone(),
                                 entry.is_system_protected,
                             );
+                            self.modal_confirm_focused = true;
                         }
-                    }
                 } else {
                     ui.label(
                         RichText::new("Select a folder or file to view details.")
@@ -580,13 +649,21 @@ impl eframe::App for FreeDataDietApp {
                 for (idx, &col) in self.config.column_order.iter().enumerate() {
                     let w = if col == ColumnId::Name { name_width } else { col.fixed_width() };
                     let is_dragging = self.dragged_column_idx == Some(idx);
-                    let is_active_sort = col.sort_by() == Some(self.sort_by);
 
-                    let arrow = if is_active_sort {
-                        if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
+                    let sort_pos = self.config.sort_rules.iter().position(|r| r.column == col);
+                    let is_active_sort = sort_pos.is_some();
+
+                    let indicator = if let Some(pos) = sort_pos {
+                        let arrow = if self.config.sort_rules[pos].direction == SortDirection::Ascending { "^" } else { "v" };
+                        if self.config.sort_rules.len() > 1 {
+                            format!(" {}{}", pos + 1, arrow)
+                        } else {
+                            format!(" {}", arrow)
+                        }
                     } else {
-                        ""
+                        "".to_string()
                     };
+
                     let col_title = if col == ColumnId::Usage {
                         match current_basis {
                             UsageBasis::Folder => "Usage (Dir)",
@@ -596,7 +673,7 @@ impl eframe::App for FreeDataDietApp {
                     } else {
                         col.title()
                     };
-                    let label_text = format!("{}{}", col_title, arrow);
+                    let label_text = format!("{}{}", col_title, indicator);
 
                     let (header_rect, header_resp) = ui.allocate_exact_size(
                         Vec2::new(w, 24.0),
@@ -609,7 +686,7 @@ impl eframe::App for FreeDataDietApp {
                         } else {
                             egui::CursorIcon::Grab
                         })
-                        .on_hover_text("Click to sort, drag left/right to reorder columns");
+                        .on_hover_text("Click to sort (multi-column: 1st=desc, 2nd=asc, 3rd=remove), drag to reorder");
 
                     if col == ColumnId::Usage {
                         header_resp.context_menu(|ui| {
@@ -631,9 +708,7 @@ impl eframe::App for FreeDataDietApp {
                     }
 
                     if header_resp.clicked() {
-                        if let Some(target) = col.sort_by() {
-                            sort_column = Some(target);
-                        }
+                        sort_column = Some(col);
                     }
 
                     if header_resp.drag_started() {
@@ -691,10 +766,17 @@ impl eframe::App for FreeDataDietApp {
                         ColumnId::Size | ColumnId::AllocatedSize | ColumnId::Items | ColumnId::Modified
                     );
 
+                    let is_centered = matches!(col, ColumnId::Type);
+
                     let (align, text_pos) = if is_right_aligned {
                         (
                             egui::Align2::RIGHT_CENTER,
                             egui::pos2(header_rect.max.x - 8.0, header_rect.center().y),
+                        )
+                    } else if is_centered {
+                        (
+                            egui::Align2::CENTER_CENTER,
+                            header_rect.center(),
                         )
                     } else {
                         (
@@ -707,7 +789,7 @@ impl eframe::App for FreeDataDietApp {
                         text_pos,
                         align,
                         &label_text,
-                        egui::FontId::proportional(12.5),
+                        egui::FontId::proportional(12.0),
                         text_color,
                     );
                 }
@@ -719,8 +801,8 @@ impl eframe::App for FreeDataDietApp {
                 let _ = self.config.save();
             }
 
-            if let Some(target) = sort_column {
-                self.toggle_sort(target);
+            if let Some(target_col) = sort_column {
+                self.toggle_sort_column(target_col);
             }
 
             if let Some(b) = change_basis {
@@ -765,81 +847,143 @@ impl eframe::App for FreeDataDietApp {
             let mut navigate_target = None;
             let mut scroll_to_selected = false;
             let mut context_delete = None;
+            let mut do_navigate_up = false;
+            let mut do_trigger_rescan = false;
+
+            let visible_entries: Vec<(usize, &FileEntry)> = self.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    if !self.config.show_hidden_files && (e.is_hidden || (e.is_reparse_point && e.is_system_protected)) {
+                        return false;
+                    }
+                    if !self.config.show_system_files && e.is_system_protected {
+                        return false;
+                    }
+                    true
+                })
+                .collect();
+
+            let selected_visible_idx = self.selected_path.as_ref().and_then(|p| {
+                visible_entries.iter().position(|(_, e)| &e.path == p)
+            });
 
             // Keyboard navigation (active when not typing in text input)
             if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None {
                 let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::J));
                 let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::K));
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::ArrowRight));
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 let back = ui.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::ArrowLeft));
+                let home = ui.input(|i| i.key_pressed(egui::Key::Home));
+                let end = ui.input(|i| i.key_pressed(egui::Key::End));
+                let page_up = ui.input(|i| i.key_pressed(egui::Key::PageUp));
+                let page_down = ui.input(|i| i.key_pressed(egui::Key::PageDown));
                 let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
                 let shift = ui.input(|i| i.modifiers.shift);
                 let refresh = ui.input(|i| i.key_pressed(egui::Key::F5));
+                let context_key = ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
 
-                if down && !self.entries.is_empty() {
-                    let next = match self.selected_index {
-                        Some(idx) => (idx + 1).min(self.entries.len().saturating_sub(1)),
+                if down && !visible_entries.is_empty() {
+                    let next = match selected_visible_idx {
+                        Some(idx) => (idx + 1).min(visible_entries.len().saturating_sub(1)),
                         None => 0,
                     };
-                    self.selected_index = Some(next);
+                    self.selected_path = Some(visible_entries[next].1.path.clone());
                     scroll_to_selected = true;
                 }
 
-                if up && !self.entries.is_empty() {
-                    let prev = match self.selected_index {
+                if up && !visible_entries.is_empty() {
+                    let prev = match selected_visible_idx {
                         Some(idx) => idx.saturating_sub(1),
                         None => 0,
                     };
-                    self.selected_index = Some(prev);
+                    self.selected_path = Some(visible_entries[prev].1.path.clone());
+                    scroll_to_selected = true;
+                }
+
+                if home && !visible_entries.is_empty() {
+                    self.selected_path = Some(visible_entries[0].1.path.clone());
+                    scroll_to_selected = true;
+                }
+
+                if end && !visible_entries.is_empty() {
+                    self.selected_path = Some(visible_entries.last().unwrap().1.path.clone());
+                    scroll_to_selected = true;
+                }
+
+                if page_up && !visible_entries.is_empty() {
+                    let curr = selected_visible_idx.unwrap_or(0);
+                    let target = curr.saturating_sub(15);
+                    self.selected_path = Some(visible_entries[target].1.path.clone());
+                    scroll_to_selected = true;
+                }
+
+                if page_down && !visible_entries.is_empty() {
+                    let curr = selected_visible_idx.unwrap_or(0);
+                    let target = (curr + 15).min(visible_entries.len().saturating_sub(1));
+                    self.selected_path = Some(visible_entries[target].1.path.clone());
                     scroll_to_selected = true;
                 }
 
                 if enter {
-                    if let Some(idx) = self.selected_index {
-                        if let Some(entry) = self.entries.get(idx) {
-                            if entry.is_dir {
-                                navigate_target = Some(entry.path.clone());
-                            } else {
-                                let _ = platform::open_file(&entry.path);
-                            }
+                    if let Some(vidx) = selected_visible_idx {
+                        let entry = visible_entries[vidx].1;
+                        if entry.is_dir {
+                            navigate_target = Some(entry.path.clone());
+                        } else {
+                            let _ = platform::open_file(&entry.path);
+                        }
+                    }
+                }
+
+                if right {
+                    if let Some(vidx) = selected_visible_idx {
+                        let entry = visible_entries[vidx].1;
+                        if entry.is_dir {
+                            navigate_target = Some(entry.path.clone());
                         }
                     }
                 }
 
                 if back {
-                    self.navigate_up();
+                    do_navigate_up = true;
                 }
 
                 if del {
-                    if let Some(idx) = self.selected_index {
-                        if let Some(entry) = self.entries.get(idx) {
-                            if shift {
-                                self.delete_modal = DeleteConfirmState::ConfirmPermanent(
-                                    entry.path.clone(),
-                                    entry.name.clone(),
-                                    entry.is_system_protected,
-                                );
-                            } else {
-                                self.delete_modal = DeleteConfirmState::ConfirmTrash(
-                                    entry.path.clone(),
-                                    entry.name.clone(),
-                                    entry.is_system_protected,
-                                );
-                            }
+                    if let Some(vidx) = selected_visible_idx {
+                        let entry = visible_entries[vidx].1;
+                        if shift {
+                            self.delete_modal = DeleteConfirmState::ConfirmPermanent(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            );
+                        } else {
+                            self.delete_modal = DeleteConfirmState::ConfirmTrash(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            );
                         }
+                        self.modal_confirm_focused = true;
                     }
                 }
 
+                if context_key && selected_visible_idx.is_some() {
+                    self.keyboard_context_menu_open = true;
+                }
+
                 if refresh {
-                    self.trigger_scan();
+                    do_trigger_rescan = true;
                 }
             }
 
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for (i, entry) in self.entries.iter().enumerate() {
-                        let is_selected = self.selected_index == Some(i);
+                    for (_vis_idx, &(orig_idx, entry)) in visible_entries.iter().enumerate() {
+                        let is_selected = self.selected_path.as_ref() == Some(&entry.path);
                         let (badge, badge_color) = get_type_badge(entry);
 
                         // Reserve background shape slot before drawing row text
@@ -853,23 +997,24 @@ impl eframe::App for FreeDataDietApp {
                                 let (cell_rect, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), egui::Sense::hover());
 
                                 match col {
+                                    ColumnId::Type => {
+                                        ui.painter().text(
+                                            cell_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            &badge,
+                                            egui::FontId::monospace(12.0),
+                                            badge_color,
+                                        );
+                                    }
                                     ColumnId::Name => {
                                         let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell_rect));
                                         child_ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                            // Type Badge
-                                            ui.add_sized(
-                                                [44.0, 20.0],
-                                                egui::Label::new(
-                                                    RichText::new(&badge).monospace().color(badge_color).strong(),
-                                                ),
-                                            );
-
-                                            // Name Label (highlighted if selected)
                                             let name_color = if is_selected {
                                                 Color32::from_rgb(120, 215, 255)
                                             } else {
                                                 Color32::WHITE
                                             };
+                                            ui.add_space(4.0);
                                             ui.add(
                                                 egui::Label::new(
                                                     RichText::new(&entry.name).color(name_color).strong(),
@@ -878,44 +1023,73 @@ impl eframe::App for FreeDataDietApp {
                                         });
                                     }
                                     ColumnId::Size => {
-                                        ui.painter().text(
-                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
-                                            egui::Align2::RIGHT_CENTER,
-                                            format_size(entry.size),
-                                            egui::FontId::monospace(12.5),
-                                            Color32::from_rgb(220, 220, 220),
-                                        );
+                                        if entry.is_scanning {
+                                            ui.painter().text(
+                                                egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                                egui::Align2::RIGHT_CENTER,
+                                                "[calculating]",
+                                                egui::FontId::monospace(11.0),
+                                                Color32::from_rgb(200, 160, 80),
+                                            );
+                                        } else {
+                                            ui.painter().text(
+                                                egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                                egui::Align2::RIGHT_CENTER,
+                                                format_size(entry.size),
+                                                egui::FontId::monospace(12.5),
+                                                Color32::from_rgb(220, 220, 220),
+                                            );
+                                        }
                                     }
                                     ColumnId::AllocatedSize => {
-                                        ui.painter().text(
-                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
-                                            egui::Align2::RIGHT_CENTER,
-                                            format_size(entry.allocated_size),
-                                            egui::FontId::monospace(12.5),
-                                            Color32::GRAY,
-                                        );
+                                        if entry.is_scanning {
+                                            ui.painter().text(
+                                                egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                                egui::Align2::RIGHT_CENTER,
+                                                "-",
+                                                egui::FontId::monospace(12.0),
+                                                Color32::DARK_GRAY,
+                                            );
+                                        } else {
+                                            ui.painter().text(
+                                                egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                                egui::Align2::RIGHT_CENTER,
+                                                format_size(entry.allocated_size),
+                                                egui::FontId::monospace(12.5),
+                                                Color32::GRAY,
+                                            );
+                                        }
                                     }
                                     ColumnId::Usage => {
                                         let bar_rect = egui::Rect::from_center_size(cell_rect.center(), Vec2::new(w - 10.0, 16.0));
                                         let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
-                                        let ratio = (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32;
-                                        let percent = entry.size as f64 / base_size * 100.0;
-                                        let text = if percent >= 10.0 {
-                                            format!("{:.1}%", percent)
-                                        } else if percent >= 0.1 {
-                                            format!("{:.1}%", percent)
-                                        } else if percent > 0.0 {
-                                            format!("{:.2}%", percent)
+                                        if entry.is_scanning {
+                                            let bar = ProgressBar::new(0.0)
+                                                .text("Scanning...")
+                                                .desired_width(w - 10.0);
+                                            child_ui.add(bar);
                                         } else {
-                                            "0.0%".to_string()
-                                        };
-                                        let bar = ProgressBar::new(ratio)
-                                            .text(text)
-                                            .desired_width(w - 10.0);
-                                        child_ui.add(bar);
+                                            let ratio = (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32;
+                                            let percent = entry.size as f64 / base_size * 100.0;
+                                            let text = if percent >= 10.0 {
+                                                format!("{:.1}%", percent)
+                                            } else if percent >= 0.1 {
+                                                format!("{:.1}%", percent)
+                                            } else if percent > 0.0 {
+                                                format!("{:.2}%", percent)
+                                            } else {
+                                                "0.0%".to_string()
+                                            };
+                                            let bar = ProgressBar::new(ratio)
+                                                .text(text)
+                                                .desired_width(w - 10.0);
+                                            child_ui.add(bar);
+                                        }
                                     }
                                     ColumnId::Items => {
-                                        let txt = if entry.is_dir {
+                                        let txt = if entry.is_scanning {
+                                            "...".to_string()
+                                        } else if entry.is_dir {
                                             format!("{}", entry.item_count)
                                         } else {
                                             "-".to_string()
@@ -952,7 +1126,7 @@ impl eframe::App for FreeDataDietApp {
                         // Click anywhere on the row (sense clicks over full row width)
                         let row_click = ui.interact(
                             full_row_rect,
-                            ui.scope_id().with(i),
+                            ui.scope_id().with(orig_idx),
                             egui::Sense::click(),
                         );
 
@@ -1042,7 +1216,7 @@ impl eframe::App for FreeDataDietApp {
                         }
 
                         if row_click.clicked() || row_click.secondary_clicked() {
-                            self.selected_index = Some(i);
+                            self.selected_path = Some(entry.path.clone());
                         }
                         if row_click.double_clicked() {
                             if entry.is_dir {
@@ -1060,12 +1234,115 @@ impl eframe::App for FreeDataDietApp {
 
             if let Some(modal) = context_delete {
                 self.delete_modal = modal;
+                self.modal_confirm_focused = true;
             }
 
             if let Some(target) = navigate_target {
                 self.navigate_to(target);
             }
+            if do_navigate_up {
+                self.navigate_up();
+            }
+            if do_trigger_rescan {
+                self.trigger_scan();
+            }
         });
+
+        // --- KEYBOARD CONTEXT MENU WINDOW ---
+        if self.keyboard_context_menu_open {
+            let selected_entry = self.selected_path.as_ref().and_then(|p| {
+                self.entries.iter().find(|e| &e.path == p).cloned()
+            });
+
+            if let Some(entry) = selected_entry {
+                let mut close_menu = false;
+                let mut menu_navigate = None;
+                let mut menu_delete = None;
+
+                egui::Window::new("Entry Actions")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ui.ctx(), |ui| {
+                        ui.label(RichText::new(&entry.name).strong());
+                        ui.separator();
+
+                        if entry.is_dir {
+                            if ui.button("Open Folder").clicked() {
+                                menu_navigate = Some(entry.path.clone());
+                                close_menu = true;
+                            }
+                        } else if ui.button("Open / Launch File").clicked() {
+                            let _ = platform::open_file(&entry.path);
+                            close_menu = true;
+                        }
+
+                        if ui.button("Show in Windows Explorer").clicked() {
+                            let _ = platform::open_in_file_manager(&entry.path);
+                            close_menu = true;
+                        }
+
+                        if ui.button("Copy Full Path").clicked() {
+                            ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
+                            close_menu = true;
+                        }
+
+                        #[cfg(windows)]
+                        if ui.button("Windows Properties...").clicked() {
+                            let _ = platform::show_properties(&entry.path);
+                            close_menu = true;
+                        }
+
+                        ui.separator();
+
+                        if ui.button(
+                            RichText::new("Move to Recycle Bin")
+                                .color(Color32::from_rgb(255, 200, 100)),
+                        ).clicked() {
+                            menu_delete = Some(DeleteConfirmState::ConfirmTrash(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            ));
+                            close_menu = true;
+                        }
+
+                        if ui.button(
+                            RichText::new("Delete Permanently")
+                                .color(Color32::from_rgb(255, 100, 100)),
+                        ).clicked() {
+                            menu_delete = Some(DeleteConfirmState::ConfirmPermanent(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            ));
+                            close_menu = true;
+                        }
+
+                        ui.separator();
+                        if ui.button("Close Menu (Esc)").clicked() {
+                            close_menu = true;
+                        }
+                    });
+
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close_menu = true;
+                }
+
+                if let Some(target) = menu_navigate {
+                    self.navigate_to(target);
+                }
+                if let Some(modal) = menu_delete {
+                    self.delete_modal = modal;
+                    self.modal_confirm_focused = true;
+                }
+                if close_menu {
+                    self.keyboard_context_menu_open = false;
+                }
+            } else {
+                self.keyboard_context_menu_open = false;
+            }
+        }
 
         // --- CONFIRMATION DIALOG MODAL ---
         let mut trigger_rescan = false;
@@ -1073,70 +1350,124 @@ impl eframe::App for FreeDataDietApp {
         let mut modal_error = None;
 
         let current_modal = self.delete_modal.clone();
-        match current_modal {
-            DeleteConfirmState::ConfirmTrash(path, name, is_system) => {
-                egui::Window::new("Move to Trash?")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(ui.ctx(), |ui| {
-                        if is_system {
-                            ui.label(RichText::new("[!] WARNING: Protected system path!").color(Color32::RED).strong());
-                        }
-                        ui.label(format!("Do you want to move \"{}\" to the Recycle Bin?", name));
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("Yes, Move to Trash").clicked() {
-                                if let Err(e) = trash::delete(&path) {
-                                    modal_error = Some(format!("Trash Error: {}", e));
-                                } else {
-                                    trigger_rescan = true;
-                                }
-                                close_modal = true;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                close_modal = true;
-                            }
-                        });
-                    });
+        if current_modal != DeleteConfirmState::None {
+            let modal_toggle = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowLeft)
+                    || i.key_pressed(egui::Key::ArrowRight)
+                    || i.key_pressed(egui::Key::Tab)
+            });
+            if modal_toggle {
+                self.modal_confirm_focused = !self.modal_confirm_focused;
             }
-            DeleteConfirmState::ConfirmPermanent(path, name, is_system) => {
-                egui::Window::new("Delete Permanently?")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(ui.ctx(), |ui| {
-                        if is_system {
-                            ui.label(RichText::new("[CRITICAL WARNING] This is a SYSTEM PATH! Deleting it may break your operating system!").color(Color32::RED).strong());
-                            ui.add_space(4.0);
-                        }
-                        ui.label(RichText::new(format!(
-                            "[DANGER] \"{}\" will be permanently deleted from disk!",
-                            name
-                        )).color(Color32::RED).strong());
-                        ui.label("This action cannot be undone.");
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button(RichText::new("Yes, Delete Permanently").color(Color32::RED)).clicked() {
-                                let res = if path.is_dir() {
-                                    std::fs::remove_dir_all(&path)
+
+            let modal_enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+            let modal_escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+
+            if modal_escape {
+                close_modal = true;
+            }
+
+            match current_modal {
+                DeleteConfirmState::ConfirmTrash(path, name, is_system) => {
+                    egui::Window::new("Move to Recycle Bin?")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ui.ctx(), |ui| {
+                            if is_system {
+                                ui.label(RichText::new("[!] WARNING: Protected system path!").color(Color32::RED).strong());
+                            }
+                            ui.label(format!("Do you want to move \"{}\" to the Recycle Bin?", name));
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                let confirm_text = if self.modal_confirm_focused {
+                                    RichText::new("▶ Yes, Move to Trash ◀").color(Color32::WHITE).strong()
                                 } else {
-                                    std::fs::remove_file(&path)
+                                    RichText::new("Yes, Move to Trash")
                                 };
-                                if let Err(e) = res {
-                                    modal_error = Some(format!("Delete Error: {}", e));
+                                let confirm_btn = egui::Button::new(confirm_text)
+                                    .fill(if self.modal_confirm_focused { Color32::from_rgb(30, 100, 180) } else { Color32::from_rgb(50, 50, 50) });
+
+                                let cancel_text = if !self.modal_confirm_focused {
+                                    RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
                                 } else {
-                                    trigger_rescan = true;
+                                    RichText::new("Cancel")
+                                };
+                                let cancel_btn = egui::Button::new(cancel_text)
+                                    .fill(if !self.modal_confirm_focused { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
+
+                                let do_confirm = ui.add(confirm_btn).clicked() || (self.modal_confirm_focused && modal_enter);
+                                let do_cancel = ui.add(cancel_btn).clicked() || (!self.modal_confirm_focused && modal_enter);
+
+                                if do_confirm {
+                                    if let Err(e) = trash::delete(&path) {
+                                        modal_error = Some(format!("Trash Error: {}", e));
+                                    } else {
+                                        trigger_rescan = true;
+                                    }
+                                    close_modal = true;
+                                } else if do_cancel {
+                                    close_modal = true;
                                 }
-                                close_modal = true;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                close_modal = true;
-                            }
+                            });
                         });
-                    });
+                }
+                DeleteConfirmState::ConfirmPermanent(path, name, is_system) => {
+                    egui::Window::new("Delete Permanently?")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ui.ctx(), |ui| {
+                            if is_system {
+                                ui.label(RichText::new("[CRITICAL WARNING] This is a SYSTEM PATH! Deleting it may break your operating system!").color(Color32::RED).strong());
+                                ui.add_space(4.0);
+                            }
+                            ui.label(RichText::new(format!(
+                                "[DANGER] \"{}\" will be permanently deleted from disk!",
+                                name
+                            )).color(Color32::RED).strong());
+                            ui.label("This action cannot be undone.");
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                let confirm_text = if self.modal_confirm_focused {
+                                    RichText::new("▶ Yes, Delete Permanently ◀").color(Color32::WHITE).strong()
+                                } else {
+                                    RichText::new("Yes, Delete Permanently").color(Color32::from_rgb(255, 100, 100))
+                                };
+                                let confirm_btn = egui::Button::new(confirm_text)
+                                    .fill(if self.modal_confirm_focused { Color32::from_rgb(180, 40, 40) } else { Color32::from_rgb(50, 50, 50) });
+
+                                let cancel_text = if !self.modal_confirm_focused {
+                                    RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
+                                } else {
+                                    RichText::new("Cancel")
+                                };
+                                let cancel_btn = egui::Button::new(cancel_text)
+                                    .fill(if !self.modal_confirm_focused { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
+
+                                let do_confirm = ui.add(confirm_btn).clicked() || (self.modal_confirm_focused && modal_enter);
+                                let do_cancel = ui.add(cancel_btn).clicked() || (!self.modal_confirm_focused && modal_enter);
+
+                                if do_confirm {
+                                    let res = if path.is_dir() {
+                                        std::fs::remove_dir_all(&path)
+                                    } else {
+                                        std::fs::remove_file(&path)
+                                    };
+                                    if let Err(e) = res {
+                                        modal_error = Some(format!("Delete Error: {}", e));
+                                    } else {
+                                        trigger_rescan = true;
+                                    }
+                                    close_modal = true;
+                                } else if do_cancel {
+                                    close_modal = true;
+                                }
+                            });
+                        });
+                }
+                DeleteConfirmState::None => {}
             }
-            DeleteConfirmState::None => {}
         }
 
         if let Some(err) = modal_error {

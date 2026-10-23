@@ -3,15 +3,6 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SortBy {
-    Size,
-    AllocatedSize,
-    Name,
-    Modified,
-    ItemCount,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortDirection {
     Ascending,
     Descending,
@@ -51,6 +42,9 @@ pub struct FileEntry {
     pub item_count: usize,
     pub is_access_denied: bool,
     pub is_system_protected: bool,
+    pub is_hidden: bool,
+    pub is_reparse_point: bool,
+    pub is_scanning: bool,
 }
 
 impl FileEntry {
@@ -64,7 +58,7 @@ impl FileEntry {
         item_count: usize,
         is_access_denied: bool,
     ) -> Self {
-        let is_system_protected = is_system_path(&path);
+        let (is_system_protected, is_hidden, is_reparse_point) = detect_path_attributes(&path, &name);
         Self {
             name,
             path,
@@ -75,8 +69,35 @@ impl FileEntry {
             item_count,
             is_access_denied,
             is_system_protected,
+            is_hidden,
+            is_reparse_point,
+            is_scanning: false,
         }
     }
+}
+
+pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
+    let is_sys_path = is_system_path(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            let attrs = meta.file_attributes();
+            let is_hidden = (attrs & 0x0000_0002) != 0 || name.starts_with('.');
+            let is_system = (attrs & 0x0000_0004) != 0 || is_sys_path;
+            let is_reparse = (attrs & 0x0000_0400) != 0;
+            return (is_system, is_hidden, is_reparse);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            let is_hidden = name.starts_with('.');
+            let is_reparse = meta.file_type().is_symlink();
+            return (is_sys_path, is_hidden, is_reparse);
+        }
+    }
+    (is_sys_path, name.starts_with('.'), false)
 }
 
 pub fn is_system_path(path: &Path) -> bool {
@@ -88,7 +109,13 @@ pub fn is_system_path(path: &Path) -> bool {
             || s == "c:\\program files"
             || s == "c:\\program files (x86)"
             || s.contains("system volume information")
+            || s.contains("documents and settings")
             || s.ends_with("$recycle.bin")
+            || s.contains("$recycle.bin")
+            || s.ends_with("hiberfil.sys")
+            || s.ends_with("pagefile.sys")
+            || s.ends_with("swapfile.sys")
+            || s.ends_with("dumpstack.log.tmp")
     }
     #[cfg(not(windows))]
     {

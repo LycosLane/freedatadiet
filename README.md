@@ -47,25 +47,41 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 | Key / Action | Function |
 | :--- | :--- |
 | **Up / Down / j / k** | Navigate selection through folder rows |
-| **Enter / Right** | Open selected directory (or launch file) |
+| **Home (Pos1) / End** | Jump to top / bottom of current listing |
+| **PageUp / PageDown** | Scroll up / down by 15 items |
+| **Right Arrow** | Open selected directory (does not launch files) |
+| **Enter** | Enter selected directory or launch file |
 | **Backspace / Left** | Navigate up to parent directory |
-| **Delete** | Move selected item to Recycle Bin / Trash |
+| **Delete** | Move selected item to Recycle Bin / Trash (with keyboard-navigable confirmation modal) |
 | **Shift + Delete** | Permanently delete selected item (with confirmation) |
+| **Context Menu / Shift+F10** | Open context menu for selected item using the keyboard |
 | **F5** | Rescan / refresh current directory |
 | **Double Click** | Enter directory or open file |
 | **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
 | **Header Drag & Drop** | Reorder table columns interactively (saved to `config.json`) |
-| **Header Click** | Sort by column (Name, Size, On Disk, Usage, Items, Date) |
+| **Header Click** | 3-state multi-column sort: 1st click = Descending, 2nd click = Ascending, 3rd click = Remove sort |
 | **`Restart as Admin`** | Elevate to Administrator permissions seamlessly |
+
+---
+
+## Features & Highlights
+
+* **Immediate Discovery:** Shows all direct child folders immediately upon scan start, marking calculating folders with `[calculating]` / `Scanning...` so large folders like `Users` or `Windows` are never hidden while counting.
+* **Dedicated Type Column:** Clean `Type` column with aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keeping file and directory names strictly aligned.
+* **Hidden & System File Toggles:** Easily filter or reveal hidden and system-protected operating system items (such as `hiberfil.sys`, `pagefile.sys`, and NTFS junctions like `Documents and Settings`).
+* **Multi-Column Sorting:** Chain sorting criteria across multiple columns with visual priority badges (`Type 1^`, `Size 2v`).
+* **Safe Modal Keyboard Flow:** Delete and Trash modals respond immediately to `Enter` to confirm, `Esc` to cancel, and `Left`/`Right`/`Tab` to switch button focus.
+* **Stable Selection:** Selection remains anchored to the chosen item even as background scan updates re-sort rows.
 
 ---
 
 ## Configuration (`config.json`)
 
 FreeDataDiet stores settings in a clean, human-readable `config.json` next to the executable:
-* Column order & visibility
+* Column order & visibility (including `Type`, `Name`, `Size`, `AllocatedSize`, `Usage`, `Items`, `Modified`)
+* Multi-column sort rules
+* Show hidden / system files toggles
 * Last visited path
-* Sort column & direction
 * Dev cache exclusion list & enabled state
 
 ---
