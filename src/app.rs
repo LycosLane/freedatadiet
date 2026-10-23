@@ -216,11 +216,11 @@ impl eframe::App for FreeDataDietApp {
 
             // Drive selection row
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Laufwerke:").strong());
+                ui.label(RichText::new("Drives:").strong());
                 for drive in &self.drives {
                     let is_current = self.current_path.starts_with(&drive.path);
                     let label = format!(
-                        "{} ({} frei von {})",
+                        "{} ({} free of {})",
                         drive.name,
                         format_size(drive.available_space),
                         format_size(drive.total_space)
@@ -247,7 +247,7 @@ impl eframe::App for FreeDataDietApp {
                                 .small(),
                         );
                     } else if ui
-                        .button(RichText::new("Als Admin neu starten").small())
+                        .button(RichText::new("Restart as Admin").small())
                         .clicked()
                     {
                         let _ = platform::restart_as_admin(Some(&self.current_path));
@@ -261,14 +261,14 @@ impl eframe::App for FreeDataDietApp {
             ui.horizontal(|ui| {
                 let has_parent = self.current_path.parent().is_some();
                 if ui
-                    .add_enabled(has_parent, egui::Button::new(" ^ Nach oben "))
+                    .add_enabled(has_parent, egui::Button::new(" ^ Up "))
                     .clicked()
                 {
                     self.navigate_up();
                 }
 
                 let text_edit = ui.add_sized(
-                    Vec2::new(ui.available_width() - 320.0, 24.0),
+                    Vec2::new(ui.available_width() - 300.0, 24.0),
                     egui::TextEdit::singleline(&mut self.path_input),
                 );
 
@@ -279,7 +279,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                 }
 
-                if ui.button("Durchsuchen...").clicked() {
+                if ui.button("Browse...").clicked() {
                     if let Some(folder) = rfd::FileDialog::new()
                         .set_directory(&self.current_path)
                         .pick_folder()
@@ -288,7 +288,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                 }
 
-                if ui.button("Aktualisieren").clicked() {
+                if ui.button("Refresh").clicked() {
                     self.trigger_scan();
                 }
 
@@ -307,15 +307,15 @@ impl eframe::App for FreeDataDietApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let prev_ignore = self.ignore_dev_caches;
-                    ui.checkbox(&mut self.ignore_dev_caches, "Dev-Caches ignorieren:");
+                    ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches:");
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut self.custom_excludes)
                             .hint_text(".git, node_modules, target, .cache")
-                            .desired_width(ui.available_width() - 110.0),
+                            .desired_width(ui.available_width() - 90.0),
                     );
 
                     if (self.ignore_dev_caches != prev_ignore || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-                        && ui.button("Anwenden").clicked()
+                        && ui.button("Apply").clicked()
                     {
                         self.trigger_scan();
                     }
@@ -336,10 +336,10 @@ impl eframe::App for FreeDataDietApp {
                 if self.is_scanning {
                     ui.spinner();
                     ui.label(format!(
-                        "Diät-Scan läuft... {} Elemente analysiert",
+                        "Scanning storage... {} items analyzed",
                         self.scanned_counter
                     ));
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button("Cancel").clicked() {
                         if let Some(scanner) = &self.scanner {
                             scanner.cancel();
                             self.is_scanning = false;
@@ -347,7 +347,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                 } else if let Some(summary) = &self.summary {
                     ui.label(RichText::new(format!(
-                        "Scan in {:.2}s  |  {} Elemente  |  Gesamtgröße: {} (Disk: {})",
+                        "Scanned in {:.2}s  |  {} items  |  Total: {} (On Disk: {})",
                         summary.duration.as_secs_f32(),
                         summary.total_files,
                         format_size(summary.total_size),
@@ -356,12 +356,12 @@ impl eframe::App for FreeDataDietApp {
                 } else if let Some(err) = &self.error_message {
                     ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
                 } else {
-                    ui.label("Bereit");
+                    ui.label("Ready");
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("[↑↓ / jk] Navigieren  |  [Enter / →] Hinein  |  [Backspace / ←] Zurück  |  [Entf] Papierkorb")
+                        RichText::new("[↑↓ / jk] Navigate  |  [Enter / →] Open  |  [Backspace / ←] Up  |  [Del] Trash  |  [Shift+Del] Delete")
                             .small()
                             .color(Color32::DARK_GRAY),
                     );
@@ -376,7 +376,7 @@ impl eframe::App for FreeDataDietApp {
             .max_size(340.0)
             .show(ui, |ui| {
                 ui.add_space(8.0);
-                ui.heading(RichText::new("Element-Details").size(16.0));
+                ui.heading(RichText::new("Item Details").size(16.0));
                 ui.separator();
 
                 if let Some(idx) = self.selected_index {
@@ -392,25 +392,25 @@ impl eframe::App for FreeDataDietApp {
                             .num_columns(2)
                             .spacing([8.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label("Typ:");
-                                ui.label(if entry.is_dir { "Ordner" } else { "Datei" });
+                                ui.label("Type:");
+                                ui.label(if entry.is_dir { "Folder" } else { "File" });
                                 ui.end_row();
 
-                                ui.label("Dateigröße:");
+                                ui.label("File Size:");
                                 ui.label(format_size(entry.size));
                                 ui.end_row();
 
-                                ui.label("Auf Datenträger:");
+                                ui.label("Size on Disk:");
                                 ui.label(format_size(entry.allocated_size));
                                 ui.end_row();
 
                                 if entry.is_dir {
-                                    ui.label("Enthaltene Dateien:");
+                                    ui.label("Items Inside:");
                                     ui.label(format!("{}", entry.item_count));
                                     ui.end_row();
                                 }
 
-                                ui.label("Geändert:");
+                                ui.label("Modified:");
                                 let date_str = entry
                                     .modified
                                     .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
@@ -423,9 +423,9 @@ impl eframe::App for FreeDataDietApp {
                                 ui.end_row();
 
                                 if entry.is_system_protected {
-                                    ui.label(RichText::new("Schutz:").color(Color32::from_rgb(255, 180, 50)));
+                                    ui.label(RichText::new("Protection:").color(Color32::from_rgb(255, 180, 50)));
                                     ui.label(
-                                        RichText::new("[SYS] Systemordner")
+                                        RichText::new("[SYS] System Path")
                                             .color(Color32::from_rgb(255, 180, 50)),
                                     );
                                     ui.end_row();
@@ -434,7 +434,7 @@ impl eframe::App for FreeDataDietApp {
                                 if entry.is_access_denied {
                                     ui.label(RichText::new("Status:").color(Color32::RED));
                                     ui.label(
-                                        RichText::new("[LOCKED] Zugriff verweigert")
+                                        RichText::new("[LOCKED] Access Denied")
                                             .color(Color32::from_rgb(255, 120, 120)),
                                     );
                                     ui.end_row();
@@ -443,25 +443,25 @@ impl eframe::App for FreeDataDietApp {
 
                         ui.add_space(14.0);
                         ui.separator();
-                        ui.label(RichText::new("Aktionen").strong());
+                        ui.label(RichText::new("Actions").strong());
                         ui.add_space(4.0);
 
                         if ui
-                            .button("Im Dateimanager anzeigen")
-                            .on_hover_text("Öffnet den nativen Explorer / Dateimanager")
+                            .button("Show in File Manager")
+                            .on_hover_text("Opens the native Explorer / file manager")
                             .clicked()
                         {
                             let _ = platform::open_in_file_manager(&entry.path);
                         }
 
-                        if !entry.is_dir && ui.button("Datei öffnen").clicked() {
+                        if !entry.is_dir && ui.button("Open File").clicked() {
                             let _ = platform::open_file(&entry.path);
                         }
 
                         ui.add_space(8.0);
 
                         let trash_btn = ui.button(
-                            RichText::new("In Papierkorb verschieben")
+                            RichText::new("Move to Trash")
                                 .color(Color32::from_rgb(255, 200, 100)),
                         );
                         if trash_btn.clicked() {
@@ -473,7 +473,7 @@ impl eframe::App for FreeDataDietApp {
                         }
 
                         let perm_btn = ui.button(
-                            RichText::new("Endgültig löschen")
+                            RichText::new("Delete Permanently")
                                 .color(Color32::from_rgb(255, 100, 100)),
                         );
                         if perm_btn.clicked() {
@@ -486,7 +486,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                 } else {
                     ui.label(
-                        RichText::new("Wähle einen Ordner oder eine Datei aus der Liste aus.")
+                        RichText::new("Select a folder or file to view details.")
                             .italics()
                             .color(Color32::GRAY),
                     );
@@ -509,7 +509,7 @@ impl eframe::App for FreeDataDietApp {
                 let size_arrow = if self.sort_by == SortBy::Size {
                     if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
                 } else { "" };
-                if ui.button(format!("Größe{}", size_arrow)).clicked() {
+                if ui.button(format!("Size{}", size_arrow)).clicked() {
                     self.toggle_sort(SortBy::Size);
                 }
 
@@ -518,7 +518,7 @@ impl eframe::App for FreeDataDietApp {
                 let disk_arrow = if self.sort_by == SortBy::AllocatedSize {
                     if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
                 } else { "" };
-                if ui.button(format!("Auf Datenträger{}", disk_arrow)).clicked() {
+                if ui.button(format!("On Disk{}", disk_arrow)).clicked() {
                     self.toggle_sort(SortBy::AllocatedSize);
                 }
 
@@ -527,7 +527,7 @@ impl eframe::App for FreeDataDietApp {
                 let items_arrow = if self.sort_by == SortBy::ItemCount {
                     if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
                 } else { "" };
-                if ui.button(format!("Elemente{}", items_arrow)).clicked() {
+                if ui.button(format!("Items{}", items_arrow)).clicked() {
                     self.toggle_sort(SortBy::ItemCount);
                 }
 
@@ -536,7 +536,7 @@ impl eframe::App for FreeDataDietApp {
                 let mod_arrow = if self.sort_by == SortBy::Modified {
                     if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
                 } else { "" };
-                if ui.button(format!("Datum{}", mod_arrow)).clicked() {
+                if ui.button(format!("Date{}", mod_arrow)).clicked() {
                     self.toggle_sort(SortBy::Modified);
                 }
             });
@@ -625,9 +625,14 @@ impl eframe::App for FreeDataDietApp {
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let total_width = ui.available_width();
+
                     for (i, entry) in self.entries.iter().enumerate() {
                         let is_selected = self.selected_index == Some(i);
                         let (badge, badge_color) = get_type_badge(entry);
+
+                        // Reserve background shape slot before drawing row text
+                        let bg_idx = ui.painter().add(egui::Shape::Noop);
 
                         let row_resp = ui.horizontal(|ui| {
                             // Type Badge
@@ -638,10 +643,18 @@ impl eframe::App for FreeDataDietApp {
                                 ),
                             );
 
-                            // Selectable Name
-                            let lbl = ui.selectable_label(
-                                is_selected,
-                                RichText::new(&entry.name).strong(),
+                            // Name Label (highlighted if selected)
+                            ui.add_sized(
+                                [270.0, 20.0],
+                                egui::Label::new(
+                                    RichText::new(&entry.name)
+                                        .color(if is_selected {
+                                            Color32::from_rgb(120, 215, 255)
+                                        } else {
+                                            Color32::WHITE
+                                        })
+                                        .strong(),
+                                ),
                             );
 
                             // Apparent Size
@@ -672,24 +685,56 @@ impl eframe::App for FreeDataDietApp {
                             // Items count
                             if entry.is_dir {
                                 ui.label(
-                                    RichText::new(format!("{} Dateien", entry.item_count))
+                                    RichText::new(format!("{} items", entry.item_count))
                                         .small()
                                         .color(Color32::DARK_GRAY),
                                 );
                             }
+                        }).response;
 
-                            lbl
-                        }).inner;
+                        // Extend rect to span full width of the table
+                        let mut full_row_rect = row_resp.rect;
+                        full_row_rect.max.x = full_row_rect.min.x + total_width;
 
-                        if is_selected && scroll_to_selected {
-                            row_resp.scroll_to_me(Some(egui::Align::Center));
+                        // Click anywhere on the row (sense clicks over full row width)
+                        let row_click = ui.interact(
+                            full_row_rect,
+                            ui.scope_id().with(i),
+                            egui::Sense::click(),
+                        );
+
+                        // Paint full-row selection or hover background behind text
+                        if is_selected {
+                            ui.painter().set(
+                                bg_idx,
+                                egui::epaint::RectShape::new(
+                                    full_row_rect,
+                                    3.0,
+                                    Color32::from_rgb(32, 54, 82),
+                                    egui::Stroke::new(1.0, Color32::from_rgb(60, 140, 220)),
+                                    egui::StrokeKind::Inside,
+                                ),
+                            );
+                        } else if row_click.hovered() {
+                            ui.painter().set(
+                                bg_idx,
+                                egui::epaint::RectShape::filled(
+                                    full_row_rect,
+                                    3.0,
+                                    Color32::from_rgb(26, 32, 42),
+                                ),
+                            );
                         }
 
-                        if row_resp.clicked() {
+                        if row_click.clicked() {
                             self.selected_index = Some(i);
                         }
-                        if row_resp.double_clicked() && entry.is_dir {
+                        if row_click.double_clicked() && entry.is_dir {
                             navigate_target = Some(entry.path.clone());
+                        }
+
+                        if is_selected && scroll_to_selected {
+                            row_click.scroll_to_me(Some(egui::Align::Center));
                         }
                     }
                 });
@@ -707,62 +752,62 @@ impl eframe::App for FreeDataDietApp {
         let current_modal = self.delete_modal.clone();
         match current_modal {
             DeleteConfirmState::ConfirmTrash(path, name, is_system) => {
-                egui::Window::new("In den Papierkorb verschieben?")
+                egui::Window::new("Move to Trash?")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ui.ctx(), |ui| {
                         if is_system {
-                            ui.label(RichText::new("[!] WARNUNG: Dies ist ein geschützter Systemordner!").color(Color32::RED).strong());
+                            ui.label(RichText::new("[!] WARNING: Protected system path!").color(Color32::RED).strong());
                         }
-                        ui.label(format!("Möchtest du \"{}\" in den Papierkorb verschieben?", name));
+                        ui.label(format!("Do you want to move \"{}\" to the Recycle Bin?", name));
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Ja, verschieben").clicked() {
+                            if ui.button("Yes, Move to Trash").clicked() {
                                 if let Err(e) = trash::delete(&path) {
-                                    modal_error = Some(format!("Papierkorb-Fehler: {}", e));
+                                    modal_error = Some(format!("Trash Error: {}", e));
                                 } else {
                                     trigger_rescan = true;
                                 }
                                 close_modal = true;
                             }
-                            if ui.button("Abbrechen").clicked() {
+                            if ui.button("Cancel").clicked() {
                                 close_modal = true;
                             }
                         });
                     });
             }
             DeleteConfirmState::ConfirmPermanent(path, name, is_system) => {
-                egui::Window::new("Endgültig löschen?")
+                egui::Window::new("Delete Permanently?")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ui.ctx(), |ui| {
                         if is_system {
-                            ui.label(RichText::new("[KRITISCHE WARNUNG] Dies ist ein SYSTEMPFAD! Das Löschen kann das Betriebssystem beschädigen!").color(Color32::RED).strong());
+                            ui.label(RichText::new("[CRITICAL WARNING] This is a SYSTEM PATH! Deleting it may break your operating system!").color(Color32::RED).strong());
                             ui.add_space(4.0);
                         }
                         ui.label(RichText::new(format!(
-                            "[ACHTUNG] \"{}\" wird unwiderruflich von der Festplatte gelöscht!",
+                            "[DANGER] \"{}\" will be permanently deleted from disk!",
                             name
                         )).color(Color32::RED).strong());
-                        ui.label("Diese Aktion kann nicht rückgängig gemacht werden.");
+                        ui.label("This action cannot be undone.");
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button(RichText::new("Ja, unwiderruflich löschen").color(Color32::RED)).clicked() {
+                            if ui.button(RichText::new("Yes, Delete Permanently").color(Color32::RED)).clicked() {
                                 let res = if path.is_dir() {
                                     std::fs::remove_dir_all(&path)
                                 } else {
                                     std::fs::remove_file(&path)
                                 };
                                 if let Err(e) = res {
-                                    modal_error = Some(format!("Löschfehler: {}", e));
+                                    modal_error = Some(format!("Delete Error: {}", e));
                                 } else {
                                     trigger_rescan = true;
                                 }
                                 close_modal = true;
                             }
-                            if ui.button("Abbrechen").clicked() {
+                            if ui.button("Cancel").clicked() {
                                 close_modal = true;
                             }
                         });

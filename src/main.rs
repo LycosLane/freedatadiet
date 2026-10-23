@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod app;
 mod model;
 mod platform;
@@ -10,7 +12,7 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1040.0, 700.0])
             .with_min_inner_size([780.0, 480.0])
-            .with_title("FreeDataDiet - Minimalistischer Disk Usage Analyzer"),
+            .with_title("FreeDataDiet - Disk Usage Analyzer"),
         ..Default::default()
     };
 

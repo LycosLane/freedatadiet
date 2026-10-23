@@ -52,7 +52,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
             Ok(entries) => entries,
             Err(e) => {
                 let _ = tx.send(ScanMessage::Failed(format!(
-                    "Fehler beim Öffnen des Ordners: {}",
+                    "Error opening folder: {}",
                     e
                 )));
                 return;
@@ -214,7 +214,7 @@ fn process_single_entry(
             let size = metadata.len();
             let allocated = get_allocated_size(path, size);
             return FileEntry::new(
-                format!("{} (ignoriert)", name),
+                format!("{} (ignored)", name),
                 path.to_path_buf(),
                 true,
                 size,
