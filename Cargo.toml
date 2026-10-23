@@ -1,0 +1,13 @@
+[package]
+name = "freedatadiet"
+version = "0.1.0"
+edition = "2024"
+authors = ["LycosLane <lycos.lane@gmail.com>"]
+description = "FreeDataDiet - Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer."
+license = "MIT"
+repository = "https://github.com/LycosLane/FreeDataDiet"
+
+[dependencies]
+eframe = "0.37.0"
+rfd = "0.17.2"
+trash = "5.2.9"

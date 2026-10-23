@@ -1,0 +1,690 @@
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
+
+use crate::model::{format_size, DriveInfo, FileEntry, SortBy, SortDirection};
+use crate::platform;
+use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
+
+#[derive(Clone, PartialEq)]
+enum DeleteConfirmState {
+    None,
+    ConfirmPermanent(PathBuf, String, bool),
+    ConfirmTrash(PathBuf, String, bool),
+}
+
+pub struct FreeDataDietApp {
+    current_path: PathBuf,
+    path_input: String,
+    drives: Vec<DriveInfo>,
+    entries: Vec<FileEntry>,
+    selected_index: Option<usize>,
+
+    sort_by: SortBy,
+    sort_dir: SortDirection,
+
+    // Exclude filters
+    ignore_dev_caches: bool,
+    custom_excludes: String,
+    show_exclude_bar: bool,
+
+    scanner: Option<ScannerHandle>,
+    is_scanning: bool,
+    scanned_counter: usize,
+    summary: Option<ScanSummary>,
+    error_message: Option<String>,
+
+    delete_modal: DeleteConfirmState,
+    is_admin: bool,
+}
+
+impl FreeDataDietApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let drives = platform::get_drives();
+        let is_admin = platform::is_admin();
+
+        let start_path = if let Some(first_drive) = drives.first() {
+            first_drive.path.clone()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+
+        let mut app = Self {
+            path_input: start_path.to_string_lossy().to_string(),
+            current_path: start_path,
+            drives,
+            entries: Vec::new(),
+            selected_index: None,
+            sort_by: SortBy::Size,
+            sort_dir: SortDirection::Descending,
+            ignore_dev_caches: true,
+            custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
+            show_exclude_bar: false,
+            scanner: None,
+            is_scanning: false,
+            scanned_counter: 0,
+            summary: None,
+            error_message: None,
+            delete_modal: DeleteConfirmState::None,
+            is_admin,
+        };
+
+        app.trigger_scan();
+        app
+    }
+
+    fn collect_excludes(&self) -> Vec<String> {
+        let mut list = Vec::new();
+        if self.ignore_dev_caches {
+            for item in self.custom_excludes.split(',') {
+                let trimmed = item.trim();
+                if !trimmed.is_empty() {
+                    list.push(trimmed.to_string());
+                }
+            }
+        }
+        list
+    }
+
+    fn trigger_scan(&mut self) {
+        if let Some(scanner) = &self.scanner {
+            scanner.cancel();
+        }
+
+        self.entries.clear();
+        self.selected_index = None;
+        self.summary = None;
+        self.error_message = None;
+        self.is_scanning = true;
+        self.scanned_counter = 0;
+
+        self.path_input = self.current_path.to_string_lossy().to_string();
+        let excludes = self.collect_excludes();
+        self.scanner = Some(start_scan(self.current_path.clone(), excludes));
+    }
+
+    fn navigate_to(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.current_path = path;
+            self.trigger_scan();
+        }
+    }
+
+    fn navigate_up(&mut self) {
+        if let Some(parent) = self.current_path.parent() {
+            self.navigate_to(parent.to_path_buf());
+        }
+    }
+
+    fn poll_scanner(&mut self) {
+        let mut messages = Vec::new();
+        if let Some(scanner) = &self.scanner {
+            while let Ok(msg) = scanner.receiver.try_recv() {
+                messages.push(msg);
+            }
+        }
+
+        for msg in messages {
+            match msg {
+                ScanMessage::Progress { scanned_items } => {
+                    self.scanned_counter = scanned_items;
+                }
+                ScanMessage::EntryReady(entry) => {
+                    self.entries.push(entry);
+                    self.sort_entries();
+                }
+                ScanMessage::Completed(sum) => {
+                    self.summary = Some(sum);
+                    self.is_scanning = false;
+                    self.sort_entries();
+                }
+                ScanMessage::Failed(err) => {
+                    self.error_message = Some(err);
+                    self.is_scanning = false;
+                }
+            }
+        }
+    }
+
+    fn sort_entries(&mut self) {
+        let sort_by = self.sort_by;
+        let sort_dir = self.sort_dir;
+
+        self.entries.sort_by(|a, b| {
+            let cmp = match sort_by {
+                SortBy::Size => a.size.cmp(&b.size),
+                SortBy::AllocatedSize => a.allocated_size.cmp(&b.allocated_size),
+                SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortBy::Modified => a.modified.cmp(&b.modified),
+                SortBy::ItemCount => a.item_count.cmp(&b.item_count),
+            };
+
+            match sort_dir {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            }
+        });
+    }
+
+    fn toggle_sort(&mut self, target: SortBy) {
+        if self.sort_by == target {
+            self.sort_dir = match self.sort_dir {
+                SortDirection::Ascending => SortDirection::Descending,
+                SortDirection::Descending => SortDirection::Ascending,
+            };
+        } else {
+            self.sort_by = target;
+            self.sort_dir = SortDirection::Descending;
+        }
+        self.sort_entries();
+    }
+}
+
+impl eframe::App for FreeDataDietApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_scanner();
+
+        if self.is_scanning {
+            ui.ctx().request_repaint();
+        }
+
+        let mut target_drive = None;
+
+        // --- TOP PANEL ---
+        Panel::top("top_panel").show(ui, |ui| {
+            ui.add_space(6.0);
+
+            // Drive selection row
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Laufwerke:").strong());
+                for drive in &self.drives {
+                    let is_current = self.current_path.starts_with(&drive.path);
+                    let label = format!(
+                        "{} ({} frei von {})",
+                        drive.name,
+                        format_size(drive.available_space),
+                        format_size(drive.total_space)
+                    );
+
+                    let btn = egui::Button::new(
+                        RichText::new(label).color(if is_current {
+                            Color32::from_rgb(100, 200, 255)
+                        } else {
+                            Color32::LIGHT_GRAY
+                        }),
+                    );
+
+                    if ui.add(btn).clicked() {
+                        target_drive = Some(drive.path.clone());
+                    }
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.is_admin {
+                        ui.label(
+                            RichText::new("🛡️ Administrator")
+                                .color(Color32::from_rgb(120, 220, 120))
+                                .small(),
+                        );
+                    } else if ui
+                        .button(RichText::new("🛡️ Als Admin neu starten").small())
+                        .clicked()
+                    {
+                        let _ = platform::restart_as_admin(Some(&self.current_path));
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Path & Navigation row
+            ui.horizontal(|ui| {
+                let has_parent = self.current_path.parent().is_some();
+                if ui
+                    .add_enabled(has_parent, egui::Button::new(" ⬆ Nach oben "))
+                    .clicked()
+                {
+                    self.navigate_up();
+                }
+
+                let text_edit = ui.add_sized(
+                    Vec2::new(ui.available_width() - 320.0, 24.0),
+                    egui::TextEdit::singleline(&mut self.path_input),
+                );
+
+                if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let candidate = PathBuf::from(&self.path_input);
+                    if candidate.exists() {
+                        self.navigate_to(candidate);
+                    }
+                }
+
+                if ui.button("📂 Durchsuchen...").clicked() {
+                    if let Some(folder) = rfd::FileDialog::new()
+                        .set_directory(&self.current_path)
+                        .pick_folder()
+                    {
+                        self.navigate_to(folder);
+                    }
+                }
+
+                if ui.button("🔄 Aktualisieren").clicked() {
+                    self.trigger_scan();
+                }
+
+                let filter_label = if self.show_exclude_bar {
+                    "⚙️ Filter ▲"
+                } else {
+                    "⚙️ Filter ▼"
+                };
+                if ui.button(filter_label).clicked() {
+                    self.show_exclude_bar = !self.show_exclude_bar;
+                }
+            });
+
+            // Exclude Filter Bar
+            if self.show_exclude_bar {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let prev_ignore = self.ignore_dev_caches;
+                    ui.checkbox(&mut self.ignore_dev_caches, "⚡ Dev-Caches ignorieren:");
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut self.custom_excludes)
+                            .hint_text(".git, node_modules, target, .cache")
+                            .desired_width(ui.available_width() - 110.0),
+                    );
+
+                    if (self.ignore_dev_caches != prev_ignore || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                        && ui.button("Anwenden").clicked()
+                    {
+                        self.trigger_scan();
+                    }
+                });
+            }
+
+            ui.add_space(6.0);
+        });
+
+        if let Some(drive_path) = target_drive {
+            self.navigate_to(drive_path);
+        }
+
+        // --- BOTTOM PANEL ---
+        Panel::bottom("bottom_panel").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if self.is_scanning {
+                    ui.spinner();
+                    ui.label(format!(
+                        "Diät-Scan läuft... {} Elemente analysiert",
+                        self.scanned_counter
+                    ));
+                    if ui.button("Abbrechen").clicked() {
+                        if let Some(scanner) = &self.scanner {
+                            scanner.cancel();
+                            self.is_scanning = false;
+                        }
+                    }
+                } else if let Some(summary) = &self.summary {
+                    ui.label(RichText::new(format!(
+                        "Scan in {:.2}s  |  {} Elemente  |  Gesamtgröße: {} (Disk: {})",
+                        summary.duration.as_secs_f32(),
+                        summary.total_files,
+                        format_size(summary.total_size),
+                        format_size(summary.total_allocated)
+                    )).small());
+                } else if let Some(err) = &self.error_message {
+                    ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
+                } else {
+                    ui.label("Bereit");
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new("Doppelklick: Hineinnavigieren  |  Auswahl für Details & Aktionen")
+                            .small()
+                            .color(Color32::DARK_GRAY),
+                    );
+                });
+            });
+            ui.add_space(4.0);
+        });
+
+        // --- RIGHT DETAILS PANEL ---
+        Panel::right("details_panel")
+            .min_size(270.0)
+            .max_size(340.0)
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                ui.heading(RichText::new("Element-Details").size(16.0));
+                ui.separator();
+
+                if let Some(idx) = self.selected_index {
+                    if let Some(entry) = self.entries.get(idx) {
+                        let icon = if entry.is_dir { "📁" } else { "📄" };
+                        ui.label(RichText::new(format!("{} {}", icon, entry.name)).strong());
+                        ui.add_space(4.0);
+
+                        egui::Grid::new("detail_grid")
+                            .num_columns(2)
+                            .spacing([8.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label("Typ:");
+                                ui.label(if entry.is_dir { "Ordner" } else { "Datei" });
+                                ui.end_row();
+
+                                ui.label("Dateigröße:");
+                                ui.label(format_size(entry.size));
+                                ui.end_row();
+
+                                ui.label("Auf Datenträger:");
+                                ui.label(format_size(entry.allocated_size));
+                                ui.end_row();
+
+                                if entry.is_dir {
+                                    ui.label("Enthaltene Dateien:");
+                                    ui.label(format!("{}", entry.item_count));
+                                    ui.end_row();
+                                }
+
+                                ui.label("Geändert:");
+                                let date_str = entry
+                                    .modified
+                                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                                    .map(|d| {
+                                        let secs = d.as_secs();
+                                        format!("{secs}")
+                                    })
+                                    .unwrap_or_else(|| "-".to_string());
+                                ui.label(date_str);
+                                ui.end_row();
+
+                                if entry.is_system_protected {
+                                    ui.label(RichText::new("Schutz:").color(Color32::from_rgb(255, 180, 50)));
+                                    ui.label(
+                                        RichText::new("🛡️ Systemordner")
+                                            .color(Color32::from_rgb(255, 180, 50)),
+                                    );
+                                    ui.end_row();
+                                }
+
+                                if entry.is_access_denied {
+                                    ui.label(RichText::new("Status:").color(Color32::RED));
+                                    ui.label(
+                                        RichText::new("🔒 Zugriff verweigert")
+                                            .color(Color32::from_rgb(255, 120, 120)),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+
+                        ui.add_space(14.0);
+                        ui.separator();
+                        ui.label(RichText::new("Aktionen").strong());
+                        ui.add_space(4.0);
+
+                        if ui
+                            .button("📂 Im Dateimanager anzeigen")
+                            .on_hover_text("Öffnet den nativen Explorer / Dateimanager")
+                            .clicked()
+                        {
+                            let _ = platform::open_in_file_manager(&entry.path);
+                        }
+
+                        if !entry.is_dir && ui.button("🚀 Datei öffnen").clicked() {
+                            let _ = platform::open_file(&entry.path);
+                        }
+
+                        ui.add_space(8.0);
+
+                        let trash_btn = ui.button(
+                            RichText::new("🗑️ In Papierkorb verschieben")
+                                .color(Color32::from_rgb(255, 200, 100)),
+                        );
+                        if trash_btn.clicked() {
+                            self.delete_modal = DeleteConfirmState::ConfirmTrash(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            );
+                        }
+
+                        let perm_btn = ui.button(
+                            RichText::new("⚠️ Endgültig löschen")
+                                .color(Color32::from_rgb(255, 100, 100)),
+                        );
+                        if perm_btn.clicked() {
+                            self.delete_modal = DeleteConfirmState::ConfirmPermanent(
+                                entry.path.clone(),
+                                entry.name.clone(),
+                                entry.is_system_protected,
+                            );
+                        }
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("Wähle einen Ordner oder eine Datei aus der Liste aus.")
+                            .italics()
+                            .color(Color32::GRAY),
+                    );
+                }
+            });
+
+        // --- CENTRAL DATA TABLE PANEL ---
+        egui::CentralPanel::default().show(ui, |ui| {
+            // Sort Header Row
+            ui.horizontal(|ui| {
+                let name_arrow = if self.sort_by == SortBy::Name {
+                    if self.sort_dir == SortDirection::Ascending { " ▲" } else { " ▼" }
+                } else { "" };
+                if ui.button(format!("Name{}", name_arrow)).clicked() {
+                    self.toggle_sort(SortBy::Name);
+                }
+
+                ui.separator();
+
+                let size_arrow = if self.sort_by == SortBy::Size {
+                    if self.sort_dir == SortDirection::Ascending { " ▲" } else { " ▼" }
+                } else { "" };
+                if ui.button(format!("Größe{}", size_arrow)).clicked() {
+                    self.toggle_sort(SortBy::Size);
+                }
+
+                ui.separator();
+
+                let disk_arrow = if self.sort_by == SortBy::AllocatedSize {
+                    if self.sort_dir == SortDirection::Ascending { " ▲" } else { " ▼" }
+                } else { "" };
+                if ui.button(format!("Auf Datenträger{}", disk_arrow)).clicked() {
+                    self.toggle_sort(SortBy::AllocatedSize);
+                }
+
+                ui.separator();
+
+                let items_arrow = if self.sort_by == SortBy::ItemCount {
+                    if self.sort_dir == SortDirection::Ascending { " ▲" } else { " ▼" }
+                } else { "" };
+                if ui.button(format!("Elemente{}", items_arrow)).clicked() {
+                    self.toggle_sort(SortBy::ItemCount);
+                }
+
+                ui.separator();
+
+                let mod_arrow = if self.sort_by == SortBy::Modified {
+                    if self.sort_dir == SortDirection::Ascending { " ▲" } else { " ▼" }
+                } else { "" };
+                if ui.button(format!("Datum{}", mod_arrow)).clicked() {
+                    self.toggle_sort(SortBy::Modified);
+                }
+            });
+
+            ui.separator();
+
+            let max_size = self
+                .entries
+                .first()
+                .map(|e| e.size)
+                .unwrap_or(1)
+                .max(1) as f32;
+
+            let mut navigate_target = None;
+
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (i, entry) in self.entries.iter().enumerate() {
+                        let is_selected = self.selected_index == Some(i);
+
+                        let icon = if entry.is_system_protected {
+                            "🛡️"
+                        } else if entry.is_access_denied {
+                            "🔒"
+                        } else if entry.is_dir {
+                            "📁"
+                        } else {
+                            "📄"
+                        };
+
+                        let name_label = format!("{} {}", icon, entry.name);
+
+                        let row_resp = ui.horizontal(|ui| {
+                            let lbl = ui.selectable_label(
+                                is_selected,
+                                RichText::new(name_label).strong(),
+                            );
+
+                            // Apparent Size
+                            ui.add_sized(
+                                [90.0, 20.0],
+                                egui::Label::new(
+                                    RichText::new(format_size(entry.size)).monospace(),
+                                ),
+                            );
+
+                            // Allocated Size on Disk
+                            ui.add_sized(
+                                [90.0, 20.0],
+                                egui::Label::new(
+                                    RichText::new(format_size(entry.allocated_size))
+                                        .monospace()
+                                        .color(Color32::GRAY),
+                                ),
+                            );
+
+                            // Progress Bar relative to largest item
+                            let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
+                            let bar = ProgressBar::new(ratio)
+                                .text(format!("{:.1}%", ratio * 100.0))
+                                .desired_width(120.0);
+                            ui.add(bar);
+
+                            // Items count
+                            if entry.is_dir {
+                                ui.label(
+                                    RichText::new(format!("{} Dateien", entry.item_count))
+                                        .small()
+                                        .color(Color32::DARK_GRAY),
+                                );
+                            }
+
+                            lbl
+                        }).inner;
+
+                        if row_resp.clicked() {
+                            self.selected_index = Some(i);
+                        }
+                        if row_resp.double_clicked() && entry.is_dir {
+                            navigate_target = Some(entry.path.clone());
+                        }
+                    }
+                });
+
+            if let Some(target) = navigate_target {
+                self.navigate_to(target);
+            }
+        });
+
+        // --- CONFIRMATION DIALOG MODAL ---
+        let mut trigger_rescan = false;
+        let mut close_modal = false;
+        let mut modal_error = None;
+
+        let current_modal = self.delete_modal.clone();
+        match current_modal {
+            DeleteConfirmState::ConfirmTrash(path, name, is_system) => {
+                egui::Window::new("In den Papierkorb verschieben?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ui.ctx(), |ui| {
+                        if is_system {
+                            ui.label(RichText::new("⚠️ WARNUNG: Dies ist ein geschützter Systemordner!").color(Color32::RED).strong());
+                        }
+                        ui.label(format!("Möchtest du \"{}\" in den Papierkorb verschieben?", name));
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Ja, verschieben").clicked() {
+                                if let Err(e) = trash::delete(&path) {
+                                    modal_error = Some(format!("Papierkorb-Fehler: {}", e));
+                                } else {
+                                    trigger_rescan = true;
+                                }
+                                close_modal = true;
+                            }
+                            if ui.button("Abbrechen").clicked() {
+                                close_modal = true;
+                            }
+                        });
+                    });
+            }
+            DeleteConfirmState::ConfirmPermanent(path, name, is_system) => {
+                egui::Window::new("⚠️ Endgültig löschen?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ui.ctx(), |ui| {
+                        if is_system {
+                            ui.label(RichText::new("🚨 KRITISCHE WARNUNG: Dies ist ein SYSTEMPFAD! Das Löschen kann das Betriebssystem beschädigen!").color(Color32::RED).strong());
+                            ui.add_space(4.0);
+                        }
+                        ui.label(RichText::new(format!(
+                            "ACHTUNG: \"{}\" wird unwiderruflich von der Festplatte gelöscht!",
+                            name
+                        )).color(Color32::RED).strong());
+                        ui.label("Diese Aktion kann nicht rückgängig gemacht werden.");
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(RichText::new("Ja, unwiderruflich löschen").color(Color32::RED)).clicked() {
+                                let res = if path.is_dir() {
+                                    std::fs::remove_dir_all(&path)
+                                } else {
+                                    std::fs::remove_file(&path)
+                                };
+                                if let Err(e) = res {
+                                    modal_error = Some(format!("Löschfehler: {}", e));
+                                } else {
+                                    trigger_rescan = true;
+                                }
+                                close_modal = true;
+                            }
+                            if ui.button("Abbrechen").clicked() {
+                                close_modal = true;
+                            }
+                        });
+                    });
+            }
+            DeleteConfirmState::None => {}
+        }
+
+        if let Some(err) = modal_error {
+            self.error_message = Some(err);
+        }
+        if close_modal {
+            self.delete_modal = DeleteConfirmState::None;
+        }
+        if trigger_rescan {
+            self.trigger_scan();
+        }
+    }
+}
