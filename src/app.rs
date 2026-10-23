@@ -40,7 +40,9 @@ struct ActiveContextMenu {
 enum ContextAction {
     Open,
     ShowInExplorer,
-    CopyPath,
+    CopyName,
+    CopyFolderPath,
+    CopyFullPath,
     #[cfg(windows)]
     Properties,
     MoveToTrash,
@@ -53,7 +55,7 @@ struct ContextMenuItem {
     color: Option<Color32>,
 }
 
-fn get_context_menu_items(_entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
+fn get_context_menu_items(entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
     let mut items = Vec::new();
     items.push(ContextMenuItem {
         action: ContextAction::Open,
@@ -66,8 +68,18 @@ fn get_context_menu_items(_entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
         color: None,
     });
     items.push(ContextMenuItem {
-        action: ContextAction::CopyPath,
-        label: "Copy Path".to_string(),
+        action: ContextAction::CopyName,
+        label: if entry.is_dir { "Copy Folder Name".to_string() } else { "Copy File Name".to_string() },
+        color: None,
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::CopyFolderPath,
+        label: "Copy Folder Path".to_string(),
+        color: None,
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::CopyFullPath,
+        label: "Copy Full Path".to_string(),
         color: None,
     });
     #[cfg(windows)]
@@ -119,6 +131,7 @@ pub struct FreeDataDietApp {
     show_settings_modal: bool,
     show_shortcuts_modal: bool,
     shortcuts_just_opened: bool,
+    status_toast: Option<(String, Instant)>,
     is_admin: bool,
 }
 
@@ -171,6 +184,7 @@ impl FreeDataDietApp {
             show_settings_modal: false,
             show_shortcuts_modal: false,
             shortcuts_just_opened: false,
+            status_toast: None,
             is_admin,
         };
 
@@ -261,6 +275,7 @@ impl FreeDataDietApp {
                         existing.item_count = entry.item_count;
                         existing.modified = entry.modified;
                         existing.is_access_denied = entry.is_access_denied;
+                        existing.is_partially_locked = entry.is_partially_locked;
                         existing.is_scanning = false;
                     } else {
                         self.entries.push(entry);
@@ -446,26 +461,36 @@ fn get_type_sort_key(e: &FileEntry) -> (u8, String) {
     }
 }
 
-fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32) {
+fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32, &'static str) {
     if entry.is_reparse_point {
         (
             "[JUNC]".to_string(),
             if is_dark { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(130, 70, 200) },
+            "Junction: NTFS junction or symbolic link",
         )
     } else if entry.is_system_protected {
         (
             "[SYS]".to_string(),
             if is_dark { Color32::from_rgb(255, 175, 40) } else { Color32::from_rgb(200, 110, 0) },
+            "System: Protected Windows system directory or file",
         )
     } else if entry.is_access_denied {
         (
             "[LOCK]".to_string(),
             if is_dark { Color32::from_rgb(255, 90, 90) } else { Color32::from_rgb(200, 30, 30) },
+            "Locked: Permission denied, folder cannot be scanned",
+        )
+    } else if entry.is_partially_locked {
+        (
+            "[PART]".to_string(),
+            if is_dark { Color32::from_rgb(255, 190, 70) } else { Color32::from_rgb(210, 130, 10) },
+            "Partially Locked: Accessible, but some subfolders were restricted",
         )
     } else if entry.is_dir {
         (
             "[DIR]".to_string(),
             if is_dark { Color32::from_rgb(80, 200, 255) } else { Color32::from_rgb(0, 120, 210) },
+            "Directory: Standard folder",
         )
     } else if let Some(ext) = entry.path.extension().and_then(|e| e.to_str()) {
         let ext_upper = ext.to_uppercase();
@@ -473,17 +498,20 @@ fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32) {
             (
                 format!("[{}]", ext_upper),
                 if is_dark { Color32::from_rgb(160, 185, 205) } else { Color32::from_rgb(60, 90, 120) },
+                "File",
             )
         } else {
             (
                 "[FILE]".to_string(),
                 if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
+                "File",
             )
         }
     } else {
         (
             "[FILE]".to_string(),
             if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
+            "File",
         )
     }
 }
@@ -517,30 +545,52 @@ impl eframe::App for FreeDataDietApp {
             self.shortcuts_just_opened = self.show_shortcuts_modal;
         }
 
-        // Global Shortcuts for Hidden & System Files, Settings
-        if !ui.ctx().egui_wants_keyboard_input()
-            && self.delete_modal == DeleteConfirmState::None
-            && self.active_context_menu.is_none()
-            && !self.show_shortcuts_modal
-            && !self.show_settings_modal
-        {
-            let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-            let shift = ui.input(|i| i.modifiers.shift);
-            let alt = ui.input(|i| i.modifiers.alt);
-            let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
-            let comma_pressed = ui.input(|i| i.key_pressed(egui::Key::Comma));
-            let s_pressed = ui.input(|i| i.key_pressed(egui::Key::S));
+        // Global Shortcuts (F-keys & Ctrl shortcuts) - active when shortcuts are enabled
+        if self.config.enable_shortcuts {
+            let f11_pressed = ui.input(|i| i.key_pressed(egui::Key::F11));
+            if f11_pressed {
+                let is_fs = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fs));
+            }
 
-            if (ctrl && comma_pressed) || (alt && s_pressed) {
-                self.show_settings_modal = !self.show_settings_modal;
-            } else if ctrl && shift && h_pressed {
-                self.config.show_system_files = !self.config.show_system_files;
-                self.save_config();
-                self.sort_entries();
-            } else if ctrl && h_pressed {
-                self.config.show_hidden_files = !self.config.show_hidden_files;
-                self.save_config();
-                self.sort_entries();
+            if !ui.ctx().egui_wants_keyboard_input()
+                && self.delete_modal == DeleteConfirmState::None
+                && self.active_context_menu.is_none()
+                && !self.show_shortcuts_modal
+                && !self.show_settings_modal
+            {
+                let ctrl = ui.input(|i| i.modifiers.ctrl);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
+                let comma_pressed = ui.input(|i| i.key_pressed(egui::Key::Comma));
+                let f12_pressed = ui.input(|i| i.key_pressed(egui::Key::F12));
+                let f5_pressed = ui.input(|i| i.key_pressed(egui::Key::F5));
+                let f2_pressed = ui.input(|i| i.key_pressed(egui::Key::F2));
+                let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
+
+                if (ctrl && comma_pressed) || f12_pressed {
+                    self.show_settings_modal = !self.show_settings_modal;
+                } else if f5_pressed {
+                    self.trigger_scan();
+                } else if f2_pressed {
+                    self.config.quick_search_mode = match self.config.quick_search_mode {
+                        QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
+                        _ => QuickSearchMode::JumpToPrefix,
+                    };
+                    self.quick_search_buffer.clear();
+                    self.save_config();
+                } else if f3_pressed {
+                    self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                    self.save_config();
+                } else if ctrl && shift && h_pressed {
+                    self.config.show_system_files = !self.config.show_system_files;
+                    self.save_config();
+                    self.sort_entries();
+                } else if ctrl && h_pressed {
+                    self.config.show_hidden_files = !self.config.show_hidden_files;
+                    self.save_config();
+                    self.sort_entries();
+                }
             }
         }
 
@@ -657,7 +707,29 @@ impl eframe::App for FreeDataDietApp {
         Panel::bottom("bottom_panel").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if self.is_scanning {
+                if let Some((toast, time)) = &self.status_toast {
+                    if time.elapsed() < Duration::from_secs(3) {
+                        ui.label(RichText::new(toast).color(Color32::from_rgb(100, 220, 150)).strong());
+                    } else if self.is_scanning {
+                        ui.spinner();
+                        ui.label(format!(
+                            "Scanning storage... {} items analyzed",
+                            self.scanned_counter
+                        ));
+                    } else if let Some(summary) = &self.summary {
+                        ui.label(RichText::new(format!(
+                            "Scanned in {:.2}s  |  {} items  |  Total: {} (On Disk: {})",
+                            summary.duration.as_secs_f32(),
+                            summary.total_files,
+                            format_size(summary.total_size),
+                            format_size(summary.total_allocated)
+                        )).small());
+                    } else if let Some(err) = &self.error_message {
+                        ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
+                    } else {
+                        ui.label("Ready");
+                    }
+                } else if self.is_scanning {
                     ui.spinner();
                     ui.label(format!(
                         "Scanning storage... {} items analyzed",
@@ -685,7 +757,7 @@ impl eframe::App for FreeDataDietApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("[Up/Down] Navigate  |  [Enter/Right] Open  |  [Backspace/Left] Up  |  [Del] Trash  |  [Ctrl+H] Hidden  |  [F1] Shortcuts")
+                        RichText::new("[Up/Down] Navigate  |  [Enter] Open  |  [Backspace] Up  |  [Del] Trash  |  [F1] Help  |  [F5] Rescan  |  [F12] Settings")
                             .small()
                             .color(if is_dark { Color32::DARK_GRAY } else { Color32::from_rgb(120, 120, 120) }),
                     );
@@ -693,146 +765,6 @@ impl eframe::App for FreeDataDietApp {
             });
             ui.add_space(4.0);
         });
-
-        // --- RIGHT DETAILS PANEL ---
-        Panel::right("details_panel")
-            .min_size(270.0)
-            .max_size(340.0)
-            .show(ui, |ui| {
-                ui.add_space(8.0);
-                ui.heading(RichText::new("Item Details").size(16.0));
-                ui.separator();
-
-                let selected_entry = self.selected_path.as_ref().and_then(|p| {
-                    self.entries.iter().find(|e| &e.path == p)
-                });
-
-                if let Some(entry) = selected_entry {
-                    let (badge, badge_color) = get_type_badge(entry, is_dark);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(badge).monospace().color(badge_color).strong());
-                        ui.label(RichText::new(&entry.name).strong());
-                    });
-                    ui.add_space(4.0);
-
-                    egui::Grid::new("detail_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.label("Type:");
-                            ui.label(if entry.is_reparse_point { "Junction / Link" } else if entry.is_dir { "Folder" } else { "File" });
-                            ui.end_row();
-
-                            ui.label("File Size:");
-                            if entry.is_scanning {
-                                ui.label(RichText::new("Calculating...").italics().color(Color32::from_rgb(200, 160, 80)));
-                            } else {
-                                ui.label(format_size(entry.size));
-                            }
-                            ui.end_row();
-
-                            ui.label("Size on Disk:");
-                            if entry.is_scanning {
-                                ui.label(RichText::new("Calculating...").italics().color(Color32::from_rgb(200, 160, 80)));
-                            } else {
-                                ui.label(format_size(entry.allocated_size));
-                            }
-                            ui.end_row();
-
-                            if entry.is_dir {
-                                ui.label("Items Inside:");
-                                if entry.is_scanning {
-                                    ui.label("...");
-                                } else {
-                                    ui.label(format!("{}", entry.item_count));
-                                }
-                                ui.end_row();
-                            }
-
-                            ui.label("Modified:");
-                            let date_str = entry
-                                .modified
-                                .map(crate::model::format_system_time)
-                                .unwrap_or_else(|| "-".to_string());
-                            ui.label(date_str);
-                            ui.end_row();
-
-                                if entry.is_system_protected {
-                                    ui.label(RichText::new("Protection:").color(Color32::from_rgb(255, 180, 50)));
-                                    ui.label(
-                                        RichText::new("[SYS] System Path")
-                                            .color(Color32::from_rgb(255, 180, 50)),
-                                    );
-                                    ui.end_row();
-                                }
-
-                                if entry.is_access_denied {
-                                    ui.label(RichText::new("Status:").color(Color32::RED));
-                                    ui.label(
-                                        RichText::new("[LOCKED] Access Denied")
-                                            .color(Color32::from_rgb(255, 120, 120)),
-                                    );
-                                    ui.end_row();
-                                }
-                            });
-
-                        ui.add_space(14.0);
-                        ui.separator();
-                        ui.label(RichText::new("Actions").strong());
-                        ui.add_space(4.0);
-
-                        if ui.button("Show in Explorer").clicked() {
-                            let _ = platform::open_in_file_manager(&entry.path);
-                        }
-
-                        if !entry.is_dir && ui.button("Open File").clicked() {
-                            let _ = platform::open_file(&entry.path);
-                        }
-
-                        if ui.button("Copy Path").clicked() {
-                            ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
-                        }
-
-                        #[cfg(windows)]
-                        if ui.button("Properties").clicked() {
-                            let _ = platform::show_properties(&entry.path);
-                        }
-
-                        ui.add_space(8.0);
-
-                        let trash_btn = ui.button(
-                            RichText::new("Move to Trash")
-                                .color(Color32::from_rgb(255, 200, 100)),
-                        );
-                        if trash_btn.clicked() {
-                            self.delete_modal = DeleteConfirmState::Confirm {
-                                path: entry.path.clone(),
-                                name: entry.name.clone(),
-                                is_system: entry.is_system_protected,
-                            };
-                            self.modal_focus = DeleteModalFocus::Trash;
-                        }
-
-                        let perm_btn = ui.button(
-                            RichText::new("Delete Permanently")
-                                .color(Color32::from_rgb(255, 100, 100)),
-                        );
-                        if perm_btn.clicked() {
-                            self.delete_modal = DeleteConfirmState::Confirm {
-                                path: entry.path.clone(),
-                                name: entry.name.clone(),
-                                is_system: entry.is_system_protected,
-                            };
-                            self.modal_focus = DeleteModalFocus::Permanent;
-                        }
-                } else {
-                    ui.label(
-                        RichText::new("Select a folder or file to view details.")
-                            .italics()
-                            .color(Color32::GRAY),
-                    );
-                }
-            });
 
         // --- CENTRAL DATA TABLE PANEL ---
         egui::CentralPanel::default().show(ui, |ui| {
@@ -1135,7 +1067,8 @@ impl eframe::App for FreeDataDietApp {
             }
 
             // Keyboard navigation (active when not typing in text input, not in modal, not in context menu)
-            if !ui.ctx().egui_wants_keyboard_input()
+            if self.config.enable_shortcuts
+                && !ui.ctx().egui_wants_keyboard_input()
                 && self.delete_modal == DeleteConfirmState::None
                 && self.active_context_menu.is_none()
                 && !self.show_shortcuts_modal
@@ -1377,7 +1310,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                     for (_vis_idx, &(orig_idx, entry)) in visible_entries.iter().enumerate() {
                         let is_selected = self.selected_path.as_ref() == Some(&entry.path);
-                        let (badge, badge_color) = get_type_badge(entry, is_dark);
+                        let (badge, badge_color, badge_tooltip) = get_type_badge(entry, is_dark);
 
                         // Reserve background shape slot before drawing row text
                         let bg_idx = ui.painter().add(egui::Shape::Noop);
@@ -1391,13 +1324,11 @@ impl eframe::App for FreeDataDietApp {
 
                                 match col {
                                     ColumnId::Type => {
-                                        ui.painter().text(
-                                            cell_rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            &badge,
-                                            egui::FontId::monospace(12.0),
-                                            badge_color,
-                                        );
+                                        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell_rect));
+                                        child_ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                                            ui.add(egui::Label::new(RichText::new(&badge).monospace().size(12.0).color(badge_color)))
+                                                .on_hover_text(badge_tooltip);
+                                        });
                                     }
                                     ColumnId::Name => {
                                         let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell_rect));
@@ -1412,7 +1343,7 @@ impl eframe::App for FreeDataDietApp {
                                                 egui::Label::new(
                                                     RichText::new(&entry.name).color(name_color).strong(),
                                                 ).truncate(),
-                                            );
+                                            ).on_hover_text(entry.path.to_string_lossy().as_ref());
                                         });
                                     }
                                     ColumnId::Size => {
@@ -1629,44 +1560,55 @@ impl eframe::App for FreeDataDietApp {
             };
 
             let resp = window.show(ui.ctx(), |ui| {
-                ui.set_min_width(210.0);
-                ui.add_space(3.0);
+                ui.set_min_width(240.0);
+                ui.add_space(4.0);
                 ui.label(RichText::new(&menu.name).strong().color(if is_dark { Color32::WHITE } else { Color32::from_rgb(20, 25, 35) }));
+                ui.label(RichText::new(menu.path.to_string_lossy().as_ref()).weak().small());
+                ui.add_space(2.0);
                 ui.separator();
 
                 for (idx, item) in items.iter().enumerate() {
-                    if item.action == ContextAction::MoveToTrash {
+                    if item.action == ContextAction::CopyName || item.action == ContextAction::MoveToTrash {
                         ui.separator();
                     }
 
                     let is_selected = menu.selected_idx == idx;
-                    let display_text = if is_selected {
-                        RichText::new(format!(">  {}", item.label)).color(Color32::WHITE).strong()
-                    } else if let Some(color) = item.color {
-                        RichText::new(&item.label).color(color)
-                    } else {
-                        RichText::new(&item.label)
-                    };
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
 
-                    let btn = egui::Button::new(display_text)
-                        .fill(if is_selected {
-                            Color32::from_rgb(30, 100, 180)
-                        } else {
-                            Color32::TRANSPARENT
-                        });
-
-                    let btn_resp = ui.add_sized([ui.available_width(), 22.0], btn);
-
-                    if btn_resp.hovered() && !is_selected {
+                    if resp.hovered() && !is_selected {
                         menu.selected_idx = idx;
                     }
 
-                    if btn_resp.clicked() || (is_selected && enter_pressed) {
+                    if is_selected {
+                        ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(30, 100, 180));
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(rect, 3.0, if is_dark { Color32::from_rgb(45, 52, 65) } else { Color32::from_rgb(230, 238, 248) });
+                    }
+
+                    let text_color = if is_selected {
+                        Color32::WHITE
+                    } else if let Some(color) = item.color {
+                        color
+                    } else if is_dark {
+                        Color32::from_rgb(220, 225, 230)
+                    } else {
+                        Color32::from_rgb(30, 35, 45)
+                    };
+
+                    ui.painter().text(
+                        egui::pos2(rect.min.x + 8.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &item.label,
+                        egui::FontId::proportional(12.5),
+                        text_color,
+                    );
+
+                    if resp.clicked() || (is_selected && enter_pressed) {
                         triggered_action = Some(item.action);
                         close_menu = true;
                     }
                 }
-                ui.add_space(3.0);
+                ui.add_space(4.0);
             });
 
             if let Some(wresp) = resp {
@@ -1691,8 +1633,25 @@ impl eframe::App for FreeDataDietApp {
                     ContextAction::ShowInExplorer => {
                         let _ = platform::open_in_file_manager(&menu.path);
                     }
-                    ContextAction::CopyPath => {
-                        ui.ctx().copy_text(menu.path.to_string_lossy().to_string());
+                    ContextAction::CopyName => {
+                        let text = menu.name.clone();
+                        platform::set_clipboard_text(&text);
+                        ui.ctx().copy_text(text.clone());
+                        self.status_toast = Some((format!("Copied name: {}", text), Instant::now()));
+                    }
+                    ContextAction::CopyFolderPath => {
+                        let text = menu.path.parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| menu.path.to_string_lossy().to_string());
+                        platform::set_clipboard_text(&text);
+                        ui.ctx().copy_text(text.clone());
+                        self.status_toast = Some((format!("Copied folder path: {}", text), Instant::now()));
+                    }
+                    ContextAction::CopyFullPath => {
+                        let text = menu.path.to_string_lossy().to_string();
+                        platform::set_clipboard_text(&text);
+                        ui.ctx().copy_text(text.clone());
+                        self.status_toast = Some((format!("Copied full path: {}", text), Instant::now()));
                     }
                     #[cfg(windows)]
                     ContextAction::Properties => {
@@ -1848,29 +1807,30 @@ impl eframe::App for FreeDataDietApp {
 
         // --- KEYBOARD SHORTCUTS POPUP ---
         if self.show_shortcuts_modal {
-            let mut close_shortcuts = false;
-
-            if self.shortcuts_just_opened {
-                self.shortcuts_just_opened = false;
-            } else {
-                // "goes away when you click any button" - any key press or Esc/Enter closes it
-                ui.input(|i| {
-                    for event in &i.events {
-                        if matches!(event, egui::Event::Key { pressed: true, .. }) {
-                            close_shortcuts = true;
-                            break;
-                        }
-                    }
-                });
-            }
+            let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let mut close_shortcuts = esc_pressed;
 
             egui::Window::new("Keyboard Shortcuts")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.set_min_width(520.0);
+                    ui.set_min_width(540.0);
                     ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Keyboard Shortcuts").heading());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.checkbox(&mut self.config.enable_shortcuts, "Enable Shortcuts")
+                                .on_hover_text("Allow F-keys and Ctrl shortcuts (disable if conflicting with your window manager)")
+                                .changed()
+                            {
+                                self.save_config();
+                            }
+                        });
+                    });
+                    ui.add_space(2.0);
+                    ui.separator();
 
                     egui::Grid::new("shortcuts_grid")
                         .num_columns(2)
@@ -1896,6 +1856,8 @@ impl eframe::App for FreeDataDietApp {
                             add_row(ui, "Backspace / Left Arrow", "Navigate up to parent directory");
 
                             add_sec(ui, "Quick Search");
+                            add_row(ui, "F2", "Cycle search mode (Jump to Prefix vs Live Filter)");
+                            add_row(ui, "F3", "Activate Live Filter search bar");
                             add_row(ui, "Typing Letters", "Jump to prefix (Explorer) or Live filter list (FilePilot)");
                             add_row(ui, "Esc", "Clear active search filter query or dismiss popup");
 
@@ -1908,14 +1870,17 @@ impl eframe::App for FreeDataDietApp {
                             add_sec(ui, "Preferences & View");
                             add_row(ui, "Ctrl + H", "Toggle hidden files and folders");
                             add_row(ui, "Ctrl + Shift + H", "Toggle protected system files & NTFS junctions");
-                            add_row(ui, "Ctrl + ,  /  Alt + S", "Open Settings & Preferences dialog");
+                            add_row(ui, "F11", "Toggle fullscreen mode");
+                            add_row(ui, "F12  /  Ctrl + ,", "Open Settings & Preferences dialog");
                             add_row(ui, "F1  /  ?", "Toggle this Keyboard Shortcuts cheat sheet");
                         });
 
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Pure Ctrl & F-key layout - no Alt or Super keys used for tiling WM compatibility.").weak().small());
+                    ui.add_space(4.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Press any key or click Close to return").weak().small());
+                        ui.label(RichText::new("Press Esc or click Close to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close (Esc)").clicked() {
                                 close_shortcuts = true;
@@ -2025,6 +1990,9 @@ impl eframe::App for FreeDataDietApp {
 
                         // 5. Application Preferences
                         ui.label(RichText::new("Application Preferences").size(14.0).strong());
+                        if ui.checkbox(&mut self.config.enable_shortcuts, "Enable Keyboard Shortcuts").on_hover_text("Allow F-keys and Ctrl shortcuts (disable if conflicting with tiling WM)").changed() {
+                            self.save_config();
+                        }
                         if ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup").changed() {
                             if !self.config.remember_last_path {
                                 self.config.last_path = None;

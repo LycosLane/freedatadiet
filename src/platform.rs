@@ -346,3 +346,57 @@ pub fn open_file(path: &Path) -> Result<(), std::io::Error> {
 
     Ok(())
 }
+
+#[cfg(windows)]
+pub fn set_clipboard_text(text: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn OpenClipboard(hwnd: isize) -> i32;
+        fn CloseClipboard() -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(uFormat: u32, hMem: isize) -> isize;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> isize;
+        fn GlobalLock(hMem: isize) -> *mut std::ffi::c_void;
+        fn GlobalUnlock(hMem: isize) -> i32;
+    }
+
+    let wide: Vec<u16> = OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * std::mem::size_of::<u16>();
+
+    unsafe {
+        if OpenClipboard(0) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+
+        // GMEM_MOVEABLE = 0x0002
+        let h_mem = GlobalAlloc(0x0002, bytes);
+        if h_mem == 0 {
+            CloseClipboard();
+            return false;
+        }
+
+        let ptr = GlobalLock(h_mem) as *mut u16;
+        if !ptr.is_null() {
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            GlobalUnlock(h_mem);
+            // CF_UNICODETEXT = 13
+            SetClipboardData(13, h_mem);
+        }
+
+        CloseClipboard();
+        true
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_clipboard_text(_text: &str) -> bool {
+    false
+}

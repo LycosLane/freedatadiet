@@ -41,6 +41,7 @@ pub struct FileEntry {
     pub modified: Option<SystemTime>,
     pub item_count: usize,
     pub is_access_denied: bool,
+    pub is_partially_locked: bool,
     pub is_system_protected: bool,
     pub is_hidden: bool,
     pub is_reparse_point: bool,
@@ -57,6 +58,7 @@ impl FileEntry {
         modified: Option<SystemTime>,
         item_count: usize,
         is_access_denied: bool,
+        is_partially_locked: bool,
     ) -> Self {
         let (is_system_protected, is_hidden, is_reparse_point) = detect_path_attributes(&path, &name);
         Self {
@@ -68,6 +70,7 @@ impl FileEntry {
             modified,
             item_count,
             is_access_denied,
+            is_partially_locked,
             is_system_protected,
             is_hidden,
             is_reparse_point,

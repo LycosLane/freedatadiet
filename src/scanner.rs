@@ -98,6 +98,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
                     modified,
                     if is_dir { 0 } else { 1 },
                     false,
+                    false,
                 );
                 item.is_scanning = is_scanning;
                 initial_entries.push(item);
@@ -224,6 +225,7 @@ fn process_single_entry(
                 None,
                 0,
                 true,
+                false,
             );
         }
     };
@@ -243,6 +245,7 @@ fn process_single_entry(
             modified,
             1,
             false,
+            false,
         )
     } else {
         // If this directory is a junction or symlink, skip recursing
@@ -258,6 +261,7 @@ fn process_single_entry(
                     0,
                     modified,
                     0,
+                    false,
                     false,
                 );
             }
@@ -276,6 +280,7 @@ fn process_single_entry(
                 modified,
                 0,
                 false,
+                false,
             );
         }
 
@@ -283,6 +288,7 @@ fn process_single_entry(
         let mut dir_allocated = 0u64;
         let mut count = 0usize;
         let mut access_denied = false;
+        let mut partially_locked = false;
 
         let mut stack = vec![path.to_path_buf()];
 
@@ -337,6 +343,8 @@ fn process_single_entry(
                 Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                     if current_dir == path {
                         access_denied = true;
+                    } else {
+                        partially_locked = true;
                     }
                 }
                 Err(_) => {}
@@ -352,6 +360,7 @@ fn process_single_entry(
             modified,
             count,
             access_denied,
+            partially_locked,
         )
     }
 }
