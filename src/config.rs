@@ -163,9 +163,9 @@ pub struct ShortcutSettings {
     #[serde(default = "default_true")]
     pub ctrl_shift_h_system: bool,
     #[serde(default = "default_true")]
-    pub delete_keys: bool,
+    pub del_trash: bool,
     #[serde(default = "default_true")]
-    pub arrow_navigation: bool,
+    pub shift_del_permanent: bool,
 }
 
 impl Default for ShortcutSettings {
@@ -179,8 +179,8 @@ impl Default for ShortcutSettings {
             ctrl_comma_settings: true,
             ctrl_h_hidden: true,
             ctrl_shift_h_system: true,
-            delete_keys: true,
-            arrow_navigation: true,
+            del_trash: true,
+            shift_del_permanent: true,
         }
     }
 }

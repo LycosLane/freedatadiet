@@ -1077,8 +1077,7 @@ impl eframe::App for FreeDataDietApp {
             }
 
             // Keyboard navigation (active when not typing in text input, not in modal, not in context menu)
-            if self.config.shortcuts.arrow_navigation
-                && !ui.ctx().egui_wants_keyboard_input()
+            if !ui.ctx().egui_wants_keyboard_input()
                 && self.delete_modal == DeleteConfirmState::None
                 && self.active_context_menu.is_none()
                 && !self.show_shortcuts_modal
@@ -1256,19 +1255,27 @@ impl eframe::App for FreeDataDietApp {
                     }
                 }
 
-                if self.config.shortcuts.delete_keys && del {
+                if del {
                     if let Some(vidx) = selected_visible_idx {
-                        let entry = visible_entries[vidx].1;
-                        self.delete_modal = DeleteConfirmState::Confirm {
-                            path: entry.path.clone(),
-                            name: entry.name.clone(),
-                            is_system: entry.is_system_protected,
-                        };
-                        self.modal_focus = if shift {
-                            DeleteModalFocus::Permanent
+                        let can_delete = if shift {
+                            self.config.shortcuts.shift_del_permanent
                         } else {
-                            DeleteModalFocus::Trash
+                            self.config.shortcuts.del_trash
                         };
+
+                        if can_delete {
+                            let entry = visible_entries[vidx].1;
+                            self.delete_modal = DeleteConfirmState::Confirm {
+                                path: entry.path.clone(),
+                                name: entry.name.clone(),
+                                is_system: entry.is_system_protected,
+                            };
+                            self.modal_focus = if shift {
+                                DeleteModalFocus::Permanent
+                            } else {
+                                DeleteModalFocus::Trash
+                            };
+                        }
                     }
                 }
 
@@ -1919,7 +1926,7 @@ impl eframe::App for FreeDataDietApp {
                             };
 
                             add_sec(ui, "Navigation");
-                            add_toggle(ui, "Up / Down", "Move selection through folder rows", &mut self.config.shortcuts.arrow_navigation);
+                            add_fixed(ui, "Up / Down", "Move selection through folder rows");
                             add_fixed(ui, "Right / Enter", "Enter selected folder or launch file");
                             add_fixed(ui, "Left / Backspace", "Navigate up to parent directory");
                             add_fixed(ui, "Home / End", "Jump to first / last item in current folder");
@@ -1932,8 +1939,8 @@ impl eframe::App for FreeDataDietApp {
                             add_fixed(ui, "Esc", "Clear active search filter query or dismiss popup");
 
                             add_sec(ui, "File Operations");
-                            add_toggle(ui, "Del", "Move selected item to Recycle Bin / Trash", &mut self.config.shortcuts.delete_keys);
-                            add_toggle(ui, "Shift + Del", "Permanently delete selected item (with confirmation)", &mut self.config.shortcuts.delete_keys);
+                            add_toggle(ui, "Del", "Move selected item to Recycle Bin / Trash", &mut self.config.shortcuts.del_trash);
+                            add_toggle(ui, "Shift + Del", "Permanently delete selected item (with confirmation)", &mut self.config.shortcuts.shift_del_permanent);
                             add_fixed(ui, "Menu / Shift+F10", "Open right-click context menu using keyboard");
                             add_toggle(ui, "F5", "Refresh and rescan current directory", &mut self.config.shortcuts.f5_refresh);
 
