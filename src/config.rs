@@ -94,6 +94,18 @@ impl UsageBasis {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum QuickSearchMode {
+    #[default]
+    JumpToPrefix,
+    LiveFilter,
+    Disabled,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub column_order: Vec<ColumnId>,
@@ -102,12 +114,16 @@ pub struct AppConfig {
     pub ignore_dev_caches: bool,
     pub custom_excludes: String,
     pub last_path: Option<PathBuf>,
+    #[serde(default = "default_true")]
+    pub remember_last_path: bool,
     #[serde(default)]
     pub usage_basis: UsageBasis,
     #[serde(default)]
     pub show_hidden_files: bool,
     #[serde(default)]
     pub show_system_files: bool,
+    #[serde(default)]
+    pub quick_search_mode: QuickSearchMode,
 }
 
 impl Default for AppConfig {
@@ -118,9 +134,11 @@ impl Default for AppConfig {
             ignore_dev_caches: true,
             custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
             last_path: None,
+            remember_last_path: true,
             usage_basis: UsageBasis::Folder,
             show_hidden_files: false,
             show_system_files: false,
+            quick_search_mode: QuickSearchMode::JumpToPrefix,
         }
     }
 }

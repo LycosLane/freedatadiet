@@ -1,8 +1,9 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
 
-use crate::config::{AppConfig, ColumnId, SortRule, UsageBasis};
+use crate::config::{AppConfig, ColumnId, QuickSearchMode, SortRule, UsageBasis};
 use crate::model::{format_size, DriveInfo, FileEntry, SortDirection};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
@@ -106,6 +107,10 @@ pub struct FreeDataDietApp {
     entries: Vec<FileEntry>,
     selected_path: Option<PathBuf>,
 
+    // Quick Search
+    quick_search_buffer: String,
+    quick_search_time: Option<Instant>,
+
     // Exclude filters
     ignore_dev_caches: bool,
     custom_excludes: String,
@@ -128,9 +133,15 @@ impl FreeDataDietApp {
         let drives = platform::get_drives();
         let is_admin = platform::is_admin();
 
-        let start_path = if let Some(ref last) = config.last_path {
-            if last.is_dir() {
-                last.clone()
+        let start_path = if config.remember_last_path {
+            if let Some(ref last) = config.last_path {
+                if last.is_dir() {
+                    last.clone()
+                } else if let Some(first_drive) = drives.first() {
+                    first_drive.path.clone()
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                }
             } else if let Some(first_drive) = drives.first() {
                 first_drive.path.clone()
             } else {
@@ -152,6 +163,8 @@ impl FreeDataDietApp {
             drives,
             entries: Vec::new(),
             selected_path: None,
+            quick_search_buffer: String::new(),
+            quick_search_time: None,
             scanner: None,
             is_scanning: false,
             scanned_counter: 0,
@@ -170,7 +183,11 @@ impl FreeDataDietApp {
     fn save_config(&mut self) {
         self.config.ignore_dev_caches = self.ignore_dev_caches;
         self.config.custom_excludes = self.custom_excludes.clone();
-        self.config.last_path = Some(self.current_path.clone());
+        if self.config.remember_last_path {
+            self.config.last_path = Some(self.current_path.clone());
+        } else {
+            self.config.last_path = None;
+        }
         let _ = self.config.save();
     }
 
@@ -194,6 +211,8 @@ impl FreeDataDietApp {
 
         self.entries.clear();
         self.selected_path = None;
+        self.quick_search_buffer.clear();
+        self.quick_search_time = None;
         self.summary = None;
         self.error_message = None;
         self.is_scanning = true;
@@ -206,6 +225,8 @@ impl FreeDataDietApp {
 
     fn navigate_to(&mut self, path: PathBuf) {
         if path.is_dir() {
+            self.quick_search_buffer.clear();
+            self.quick_search_time = None;
             self.current_path = path;
             self.save_config();
             self.trigger_scan();
@@ -384,13 +405,19 @@ impl FreeDataDietApp {
 
     fn toggle_sort_column(&mut self, col: ColumnId) {
         if let Some(pos) = self.config.sort_rules.iter().position(|r| r.column == col) {
-            match self.config.sort_rules[pos].direction {
-                SortDirection::Descending => {
-                    self.config.sort_rules[pos].direction = SortDirection::Ascending;
-                }
-                SortDirection::Ascending => {
-                    self.config.sort_rules.remove(pos);
-                }
+            let default_dir = match col {
+                ColumnId::Name | ColumnId::Type => SortDirection::Ascending,
+                _ => SortDirection::Descending,
+            };
+            if self.config.sort_rules[pos].direction == default_dir {
+                // Second click: invert direction
+                self.config.sort_rules[pos].direction = match default_dir {
+                    SortDirection::Ascending => SortDirection::Descending,
+                    SortDirection::Descending => SortDirection::Ascending,
+                };
+            } else {
+                // Third click: remove sort rule
+                self.config.sort_rules.remove(pos);
             }
         } else {
             let default_dir = match col {
@@ -448,6 +475,23 @@ impl eframe::App for FreeDataDietApp {
 
         if self.is_scanning {
             ui.ctx().request_repaint();
+        }
+
+        // Global Shortcuts for Hidden & System Files
+        if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None && self.active_context_menu.is_none() {
+            let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+            let shift = ui.input(|i| i.modifiers.shift);
+            let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
+
+            if ctrl && shift && h_pressed {
+                self.config.show_system_files = !self.config.show_system_files;
+                self.save_config();
+                self.sort_entries();
+            } else if ctrl && h_pressed {
+                self.config.show_hidden_files = !self.config.show_hidden_files;
+                self.save_config();
+                self.sort_entries();
+            }
         }
 
         let mut target_drive = None;
@@ -535,10 +579,37 @@ impl eframe::App for FreeDataDietApp {
 
                         ui.separator();
                         ui.label(RichText::new("File Filters").strong());
-                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files").on_hover_text("Show hidden files and dotfiles").changed() {
+                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)").on_hover_text("Show hidden files and dotfiles (Toggle with Ctrl+H)").changed() {
                             self.save_config();
                         }
-                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions").on_hover_text("Show protected system files and NTFS junctions (e.g. Documents and Settings)").changed() {
+                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions (Ctrl+Shift+H)").on_hover_text("Show protected system files and NTFS junctions (Toggle with Ctrl+Shift+H)").changed() {
+                            self.save_config();
+                        }
+
+                        ui.separator();
+                        ui.label(RichText::new("Quick Search Mode").strong());
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to item (Explorer style)").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::JumpToPrefix;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::Disabled, "Disabled").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::Disabled;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+
+                        ui.separator();
+                        ui.label(RichText::new("Application Preferences").strong());
+                        if ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup").changed() {
+                            if !self.config.remember_last_path {
+                                self.config.last_path = None;
+                            }
                             self.save_config();
                         }
 
@@ -642,7 +713,7 @@ impl eframe::App for FreeDataDietApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("[Up/Down / jk] Navigate  |  [Enter / Right] Open  |  [Backspace / Left] Up  |  [Del] Trash  |  [Shift+Del] Delete")
+                        RichText::new("[Up/Down] Navigate  |  [Enter/Right] Open  |  [Backspace/Left] Up  |  [Del] Trash  |  [Ctrl+H] Hidden")
                             .small()
                             .color(Color32::DARK_GRAY),
                     );
@@ -830,12 +901,11 @@ impl eframe::App for FreeDataDietApp {
                     let sort_pos = self.config.sort_rules.iter().position(|r| r.column == col);
                     let is_active_sort = sort_pos.is_some();
 
-                    let indicator = if let Some(pos) = sort_pos {
-                        let arrow = if self.config.sort_rules[pos].direction == SortDirection::Ascending { "^" } else { "v" };
+                    let priority_suffix = if let Some(pos) = sort_pos {
                         if self.config.sort_rules.len() > 1 {
-                            format!(" {}{}", pos + 1, arrow)
+                            format!(" {}", pos + 1)
                         } else {
-                            format!(" {}", arrow)
+                            "".to_string()
                         }
                     } else {
                         "".to_string()
@@ -850,7 +920,7 @@ impl eframe::App for FreeDataDietApp {
                     } else {
                         col.title()
                     };
-                    let label_text = format!("{}{}", col_title, indicator);
+                    let label_text = format!("{}{}", col_title, priority_suffix);
 
                     let (header_rect, header_resp) = ui.allocate_exact_size(
                         Vec2::new(w, 24.0),
@@ -945,30 +1015,66 @@ impl eframe::App for FreeDataDietApp {
 
                     let is_centered = matches!(col, ColumnId::Type);
 
-                    let (align, text_pos) = if is_right_aligned {
-                        (
-                            egui::Align2::RIGHT_CENTER,
-                            egui::pos2(header_rect.max.x - 8.0, header_rect.center().y),
-                        )
-                    } else if is_centered {
-                        (
-                            egui::Align2::CENTER_CENTER,
-                            header_rect.center(),
-                        )
-                    } else {
-                        (
-                            egui::Align2::LEFT_CENTER,
-                            egui::pos2(header_rect.min.x + 8.0, header_rect.center().y),
-                        )
-                    };
+                    let font_id = egui::FontId::proportional(12.0);
+                    let galley = ui.painter().layout_no_wrap(label_text.clone(), font_id.clone(), text_color);
+                    let text_w = galley.size().x;
+                    let arrow_w = 7.0;
+                    let gap = 4.0;
+                    let cy = header_rect.center().y;
 
-                    ui.painter().text(
-                        text_pos,
-                        align,
-                        &label_text,
-                        egui::FontId::proportional(12.0),
-                        text_color,
-                    );
+                    if let Some(pos) = sort_pos {
+                        let dir = self.config.sort_rules[pos].direction;
+                        let arrow_color = Color32::from_rgb(100, 185, 255);
+
+                        let (text_pos, align, arrow_cx) = if is_right_aligned {
+                            let right_pad = 8.0;
+                            let acx = header_rect.max.x - right_pad - (arrow_w / 2.0);
+                            let tpos = egui::pos2(header_rect.max.x - right_pad - arrow_w - gap, cy);
+                            (tpos, egui::Align2::RIGHT_CENTER, acx)
+                        } else if is_centered {
+                            let total_w = text_w + gap + arrow_w;
+                            let start_x = header_rect.center().x - (total_w / 2.0);
+                            let tpos = egui::pos2(start_x, cy);
+                            let acx = start_x + text_w + gap + (arrow_w / 2.0);
+                            (tpos, egui::Align2::LEFT_CENTER, acx)
+                        } else {
+                            let left_pad = 8.0;
+                            let start_x = header_rect.min.x + left_pad;
+                            let tpos = egui::pos2(start_x, cy);
+                            let acx = start_x + text_w + gap + (arrow_w / 2.0);
+                            (tpos, egui::Align2::LEFT_CENTER, acx)
+                        };
+
+                        ui.painter().text(text_pos, align, &label_text, font_id, text_color);
+
+                        let points = match dir {
+                            SortDirection::Ascending => vec![
+                                egui::pos2(arrow_cx, cy - 2.5),
+                                egui::pos2(arrow_cx + 3.5, cy + 2.5),
+                                egui::pos2(arrow_cx - 3.5, cy + 2.5),
+                            ],
+                            SortDirection::Descending => vec![
+                                egui::pos2(arrow_cx - 3.5, cy - 2.5),
+                                egui::pos2(arrow_cx + 3.5, cy - 2.5),
+                                egui::pos2(arrow_cx, cy + 2.5),
+                            ],
+                        };
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            points,
+                            arrow_color,
+                            egui::Stroke::NONE,
+                        ));
+                    } else {
+                        let (text_pos, align) = if is_right_aligned {
+                            (egui::pos2(header_rect.max.x - 8.0, cy), egui::Align2::RIGHT_CENTER)
+                        } else if is_centered {
+                            (header_rect.center(), egui::Align2::CENTER_CENTER)
+                        } else {
+                            (egui::pos2(header_rect.min.x + 8.0, cy), egui::Align2::LEFT_CENTER)
+                        };
+
+                        ui.painter().text(text_pos, align, &label_text, font_id, text_color);
+                    }
                 }
             });
 
@@ -1037,24 +1143,61 @@ impl eframe::App for FreeDataDietApp {
                     if !self.config.show_system_files && e.is_system_protected {
                         return false;
                     }
+                    if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                        if !e.name.to_lowercase().contains(&self.quick_search_buffer.to_lowercase()) {
+                            return false;
+                        }
+                    }
                     true
                 })
                 .collect();
 
-            let selected_visible_idx = self.selected_path.as_ref().and_then(|p| {
+            let mut selected_visible_idx = self.selected_path.as_ref().and_then(|p| {
                 visible_entries.iter().position(|(_, e)| &e.path == p)
             });
+
+            if selected_visible_idx.is_none() && !visible_entries.is_empty() && self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                self.selected_path = Some(visible_entries[0].1.path.clone());
+                selected_visible_idx = Some(0);
+            }
 
             // Keyboard navigation (active when not typing in text input, not in modal, not in context menu)
             if !ui.ctx().egui_wants_keyboard_input()
                 && self.delete_modal == DeleteConfirmState::None
                 && self.active_context_menu.is_none()
             {
-                let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::J));
-                let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::K));
+                let (typed_text, key_backspace, key_escape) = ui.input(|i| {
+                    let mut text = String::new();
+                    let mut bs = false;
+                    let mut esc = false;
+                    for event in &i.events {
+                        match event {
+                            egui::Event::Text(t) => {
+                                if !i.modifiers.ctrl && !i.modifiers.alt {
+                                    for ch in t.chars() {
+                                        if !ch.is_control() {
+                                            text.push(ch);
+                                        }
+                                    }
+                                }
+                            }
+                            egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                                bs = true;
+                            }
+                            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => {
+                                esc = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    (text, bs, esc)
+                });
+
+                let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
-                let back = ui.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::ArrowLeft));
+                let arrow_left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
                 let home = ui.input(|i| i.key_pressed(egui::Key::Home));
                 let end = ui.input(|i| i.key_pressed(egui::Key::End));
                 let page_up = ui.input(|i| i.key_pressed(egui::Key::PageUp));
@@ -1063,6 +1206,75 @@ impl eframe::App for FreeDataDietApp {
                 let shift = ui.input(|i| i.modifiers.shift);
                 let refresh = ui.input(|i| i.key_pressed(egui::Key::F5));
                 let context_key = ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
+
+                // Quick Search handling
+                match self.config.quick_search_mode {
+                    QuickSearchMode::LiveFilter => {
+                        if key_escape {
+                            self.quick_search_buffer.clear();
+                        } else if key_backspace {
+                            if !self.quick_search_buffer.is_empty() {
+                                self.quick_search_buffer.pop();
+                            } else {
+                                do_navigate_up = true;
+                            }
+                        } else if !typed_text.is_empty() {
+                            self.quick_search_buffer.push_str(&typed_text);
+                            scroll_to_selected = true;
+                        }
+
+                        if arrow_left {
+                            do_navigate_up = true;
+                        }
+                    }
+                    QuickSearchMode::JumpToPrefix => {
+                        if key_escape {
+                            self.quick_search_buffer.clear();
+                            self.quick_search_time = None;
+                        } else if key_backspace || arrow_left {
+                            do_navigate_up = true;
+                        } else if !typed_text.is_empty() {
+                            let now = Instant::now();
+                            let timed_out = match self.quick_search_time {
+                                Some(t) => now.duration_since(t) > Duration::from_millis(1000),
+                                None => true,
+                            };
+                            if timed_out {
+                                self.quick_search_buffer.clear();
+                            }
+                            self.quick_search_time = Some(now);
+
+                            for ch in typed_text.chars() {
+                                let ch_lower = ch.to_lowercase().to_string();
+                                if self.quick_search_buffer.len() == 1 && self.quick_search_buffer.to_lowercase() == ch_lower {
+                                    let start_idx = match selected_visible_idx {
+                                        Some(curr) => (curr + 1) % visible_entries.len().max(1),
+                                        None => 0,
+                                    };
+                                    let found = visible_entries.iter().skip(start_idx)
+                                        .chain(visible_entries.iter().take(start_idx))
+                                        .find(|(_, e)| e.name.to_lowercase().starts_with(&ch_lower));
+                                    if let Some((_, entry)) = found {
+                                        self.selected_path = Some(entry.path.clone());
+                                        scroll_to_selected = true;
+                                    }
+                                } else {
+                                    self.quick_search_buffer.push(ch);
+                                    let query = self.quick_search_buffer.to_lowercase();
+                                    if let Some((_, entry)) = visible_entries.iter().find(|(_, e)| e.name.to_lowercase().starts_with(&query)) {
+                                        self.selected_path = Some(entry.path.clone());
+                                        scroll_to_selected = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    QuickSearchMode::Disabled => {
+                        if key_backspace || arrow_left {
+                            do_navigate_up = true;
+                        }
+                    }
+                }
 
                 if down && !visible_entries.is_empty() {
                     let next = match selected_visible_idx {
@@ -1126,10 +1338,6 @@ impl eframe::App for FreeDataDietApp {
                     }
                 }
 
-                if back {
-                    do_navigate_up = true;
-                }
-
                 if del {
                     if let Some(vidx) = selected_visible_idx {
                         let entry = visible_entries[vidx].1;
@@ -1164,9 +1372,34 @@ impl eframe::App for FreeDataDietApp {
                 }
             }
 
+            if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Filter:").color(Color32::from_rgb(255, 200, 100)).strong());
+                    ui.label(RichText::new(format!("\"{}\"", self.quick_search_buffer)).color(Color32::WHITE).strong());
+                    ui.label(RichText::new(format!("({} matches)", visible_entries.len())).weak());
+                    if ui.button("Clear (Esc)").clicked() {
+                        self.quick_search_buffer.clear();
+                    }
+                });
+                ui.add_space(2.0);
+            }
+
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    if visible_entries.is_empty() {
+                        ui.add_space(24.0);
+                        ui.vertical_centered(|ui| {
+                            if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                                ui.label(RichText::new(format!("No entries matching \"{}\"", self.quick_search_buffer)).weak());
+                            } else if self.is_scanning {
+                                ui.label(RichText::new("Discovering directory contents...").italics().weak());
+                            } else {
+                                ui.label(RichText::new("Folder is empty").weak());
+                            }
+                        });
+                    }
                     for (_vis_idx, &(orig_idx, entry)) in visible_entries.iter().enumerate() {
                         let is_selected = self.selected_path.as_ref() == Some(&entry.path);
                         let (badge, badge_color) = get_type_badge(entry);
@@ -1390,12 +1623,10 @@ impl eframe::App for FreeDataDietApp {
 
             let nav_down = ui.input(|i| {
                 i.key_pressed(egui::Key::ArrowDown)
-                    || i.key_pressed(egui::Key::J)
                     || (!i.modifiers.shift && i.key_pressed(egui::Key::Tab))
             });
             let nav_up = ui.input(|i| {
                 i.key_pressed(egui::Key::ArrowUp)
-                    || i.key_pressed(egui::Key::K)
                     || (i.modifiers.shift && i.key_pressed(egui::Key::Tab))
             });
 

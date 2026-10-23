@@ -9,12 +9,16 @@
 [![Zero Bloatware](https://img.shields.io/badge/Bloatware-0%25-brightgreen.svg)]()
 
 ```text
-       \   /
-      .-'-.-'-.
-    /`         `\      FreeDataDiet
-   |   (o) (o)   |     Put your storage on a diet.
-    \   \___/   /      Find what's eating your gigabytes.
-     `-..___..-'
+              .
+             / \
+         ___/___\___
+        /     |     `---.
+    ===+===   |          \
+    |     |   |        ===+===
+   [  GB   ]  |        |     |
+   \_______/ ===      [  MB   ]   FreeDataDiet
+            /   \     \_______/   Put your storage on a diet.
+           =======                Find what's eating your gigabytes.
 ```
 
 ---
@@ -46,20 +50,24 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 
 | Key / Action | Function |
 | :--- | :--- |
-| **Up / Down / j / k** | Navigate selection through folder rows |
-| **Home (Pos1) / End** | Jump to top / bottom of current listing |
+| **Up / Down** | Navigate selection through folder rows |
+| **Home / End** | Jump to top / bottom of current listing |
 | **PageUp / PageDown** | Scroll up / down by 15 items |
-| **Right Arrow** | Open selected directory (does not launch files) |
+| **Right Arrow** | Navigate into selected folder |
 | **Enter** | Enter selected directory or launch file |
 | **Backspace / Left** | Navigate up to parent directory |
+| **Typing Letters (Quick Search)** | Jump to item by name (Explorer style) or live filter visible rows (FilePilot style, configurable in Settings) |
+| **Esc** | Clear quick search filter |
 | **Delete** | Move selected item to Recycle Bin / Trash (with keyboard-navigable confirmation modal) |
 | **Shift + Delete** | Permanently delete selected item (with confirmation) |
 | **Context Menu / Shift+F10** | Open context menu for selected item using the keyboard |
+| **Ctrl + H** | Toggle hidden files and folders |
+| **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
 | **F5** | Rescan / refresh current directory |
 | **Double Click** | Enter directory or open file |
 | **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
 | **Header Drag & Drop** | Reorder table columns interactively (saved to `config.json`) |
-| **Header Click** | 3-state multi-column sort: 1st click = Descending, 2nd click = Ascending, 3rd click = Remove sort |
+| **Header Click** | 3-state multi-column sort: 1st click = default direction, 2nd click = inverted direction, 3rd click = remove sort rule |
 | **`Restart as Admin`** | Elevate to Administrator permissions seamlessly |
 
 ---
@@ -68,8 +76,10 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 
 * **Immediate Discovery:** Shows all direct child folders immediately upon scan start, marking calculating folders with `[calculating]` / `Scanning...` so large folders like `Users` or `Windows` are never hidden while counting.
 * **Dedicated Type Column:** Clean `Type` column with aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keeping file and directory names strictly aligned.
+* **Quick Search Modes:** Choose between Windows Explorer-style *Jump-to-prefix* (cycles on repeated keys) or FilePilot-style *Live filtering* with instant feedback banner.
+* **Geometric Sort Arrows:** Crisp vector triangles drawn directly to guarantee identical baseline, dimensions, and zero unicode font fallback glitches.
 * **Hidden & System File Toggles:** Easily filter or reveal hidden and system-protected operating system items (such as `hiberfil.sys`, `pagefile.sys`, and NTFS junctions like `Documents and Settings`).
-* **Multi-Column Sorting:** Chain sorting criteria across multiple columns with visual priority badges (`Type 1^`, `Size 2v`).
+* **Multi-Column Sorting:** Chain sorting criteria across multiple columns with visual priority badges (`Type 1`, `Size 2`).
 * **Safe Modal Keyboard Flow:** Delete and Trash modals respond immediately to `Enter` to confirm, `Esc` to cancel, and `Left`/`Right`/`Tab` to switch button focus.
 * **Stable Selection:** Selection remains anchored to the chosen item even as background scan updates re-sort rows.
 
@@ -81,7 +91,9 @@ FreeDataDiet stores settings in a clean, human-readable `config.json` next to th
 * Column order & visibility (including `Type`, `Name`, `Size`, `AllocatedSize`, `Usage`, `Items`, `Modified`)
 * Multi-column sort rules
 * Show hidden / system files toggles
-* Last visited path
+* Quick search mode (`"JumpToPrefix"`, `"LiveFilter"`, `"Disabled"`)
+* Remember last visited path toggle (`remember_last_path`)
+* Last visited path (`last_path`)
 * Dev cache exclusion list & enabled state
 
 ---
