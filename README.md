@@ -1,25 +1,14 @@
 # FreeDataDiet
 
-> Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer.  
-> *No subscriptions. No nag screens. Pure, transparent disk diagnostics.*
+> **Put your storage on a diet.**  
+> A lightning-fast, zero-bloat disk usage analyzer built in native Rust & egui.  
+> *Find what's eating your gigabytes — no subscriptions, no ads, no background services.*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version: 0.5.0](https://img.shields.io/badge/version-0.5.0-blue.svg)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
-[![Zero Bloatware](https://img.shields.io/badge/Bloatware-0%25-brightgreen.svg)]()
-
-```text
-              .
-             / \
-         ___/___\___
-        /     |     `---.
-    ===+===   |          \
-    |     |   |        ===+===
-   [  GB   ]  |        |     |
-   \_______/ ===      [  MB   ]   FreeDataDiet
-            /   \     \_______/   Put your storage on a diet.
-           =======                Find what's eating your gigabytes.
-```
+[![Single Binary](https://img.shields.io/badge/Binary-Portable%20%28No%20Install%29-brightgreen.svg)]()
 
 ---
 
