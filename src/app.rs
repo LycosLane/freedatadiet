@@ -24,6 +24,78 @@ enum DeleteModalFocus {
     Cancel,
 }
 
+#[derive(Clone)]
+struct ActiveContextMenu {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+    is_system_protected: bool,
+    pos: Option<egui::Pos2>,
+    selected_idx: usize,
+    just_opened: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextAction {
+    Open,
+    ShowInExplorer,
+    CopyPath,
+    #[cfg(windows)]
+    Properties,
+    MoveToTrash,
+    DeletePermanently,
+}
+
+struct ContextMenuItem {
+    action: ContextAction,
+    label: String,
+    color: Option<Color32>,
+}
+
+fn get_context_menu_items(entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
+    let mut items = Vec::new();
+    if entry.is_dir {
+        items.push(ContextMenuItem {
+            action: ContextAction::Open,
+            label: "Open Folder in FreeDataDiet".to_string(),
+            color: None,
+        });
+    } else {
+        items.push(ContextMenuItem {
+            action: ContextAction::Open,
+            label: "Open / Launch File".to_string(),
+            color: None,
+        });
+    }
+    items.push(ContextMenuItem {
+        action: ContextAction::ShowInExplorer,
+        label: "Show in Windows Explorer".to_string(),
+        color: None,
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::CopyPath,
+        label: "Copy Full Path".to_string(),
+        color: None,
+    });
+    #[cfg(windows)]
+    items.push(ContextMenuItem {
+        action: ContextAction::Properties,
+        label: "Windows Properties...".to_string(),
+        color: None,
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::MoveToTrash,
+        label: "Move to Recycle Bin".to_string(),
+        color: Some(Color32::from_rgb(255, 200, 100)),
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::DeletePermanently,
+        label: "Delete Permanently".to_string(),
+        color: Some(Color32::from_rgb(255, 100, 100)),
+    });
+    items
+}
+
 pub struct FreeDataDietApp {
     config: AppConfig,
     dragged_column_idx: Option<usize>,
@@ -47,7 +119,7 @@ pub struct FreeDataDietApp {
 
     delete_modal: DeleteConfirmState,
     modal_focus: DeleteModalFocus,
-    keyboard_context_menu_open: bool,
+    active_context_menu: Option<ActiveContextMenu>,
     is_admin: bool,
 }
 
@@ -89,7 +161,7 @@ impl FreeDataDietApp {
             error_message: None,
             delete_modal: DeleteConfirmState::None,
             modal_focus: DeleteModalFocus::Trash,
-            keyboard_context_menu_open: false,
+            active_context_menu: None,
             is_admin,
         };
 
@@ -942,7 +1014,7 @@ impl eframe::App for FreeDataDietApp {
 
             let mut navigate_target = None;
             let mut scroll_to_selected = false;
-            let mut context_delete: Option<(DeleteConfirmState, DeleteModalFocus)> = None;
+            let mut open_context_menu: Option<ActiveContextMenu> = None;
             let mut do_navigate_up = false;
             let mut do_trigger_rescan = false;
 
@@ -964,8 +1036,11 @@ impl eframe::App for FreeDataDietApp {
                 visible_entries.iter().position(|(_, e)| &e.path == p)
             });
 
-            // Keyboard navigation (active when not typing in text input)
-            if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None {
+            // Keyboard navigation (active when not typing in text input, not in modal, not in context menu)
+            if !ui.ctx().egui_wants_keyboard_input()
+                && self.delete_modal == DeleteConfirmState::None
+                && self.active_context_menu.is_none()
+            {
                 let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::J));
                 let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::K));
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1063,7 +1138,16 @@ impl eframe::App for FreeDataDietApp {
                 }
 
                 if context_key && selected_visible_idx.is_some() {
-                    self.keyboard_context_menu_open = true;
+                    let entry = visible_entries[selected_visible_idx.unwrap()].1;
+                    open_context_menu = Some(ActiveContextMenu {
+                        path: entry.path.clone(),
+                        name: entry.name.clone(),
+                        is_dir: entry.is_dir,
+                        is_system_protected: entry.is_system_protected,
+                        pos: None,
+                        selected_idx: 0,
+                        just_opened: true,
+                    });
                 }
 
                 if refresh {
@@ -1222,74 +1306,6 @@ impl eframe::App for FreeDataDietApp {
                             egui::Sense::click(),
                         );
 
-                        // Right-Click Context Menu
-                        row_click.context_menu(|ui| {
-                            ui.set_min_width(210.0);
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&badge).monospace().color(badge_color).strong());
-                                ui.label(RichText::new(&entry.name).strong());
-                            });
-                            ui.separator();
-
-                            if entry.is_dir {
-                                if ui.button("Open Folder in FreeDataDiet").clicked() {
-                                    navigate_target = Some(entry.path.clone());
-                                    ui.close();
-                                }
-                            } else if ui.button("Open / Launch File").clicked() {
-                                let _ = platform::open_file(&entry.path);
-                                ui.close();
-                            }
-
-                            if ui.button("Show in Windows Explorer").clicked() {
-                                let _ = platform::open_in_file_manager(&entry.path);
-                                ui.close();
-                            }
-
-                            if ui.button("Copy Full Path").clicked() {
-                                ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
-                                ui.close();
-                            }
-
-                            #[cfg(windows)]
-                            if ui.button("Windows Properties...").clicked() {
-                                let _ = platform::show_properties(&entry.path);
-                                ui.close();
-                            }
-
-                            ui.separator();
-
-                            if ui.button(
-                                RichText::new("Move to Recycle Bin")
-                                    .color(Color32::from_rgb(255, 200, 100)),
-                            ).clicked() {
-                                context_delete = Some((
-                                    DeleteConfirmState::Confirm {
-                                        path: entry.path.clone(),
-                                        name: entry.name.clone(),
-                                        is_system: entry.is_system_protected,
-                                    },
-                                    DeleteModalFocus::Trash,
-                                ));
-                                ui.close();
-                            }
-
-                            if ui.button(
-                                RichText::new("Delete Permanently")
-                                    .color(Color32::from_rgb(255, 100, 100)),
-                            ).clicked() {
-                                context_delete = Some((
-                                    DeleteConfirmState::Confirm {
-                                        path: entry.path.clone(),
-                                        name: entry.name.clone(),
-                                        is_system: entry.is_system_protected,
-                                    },
-                                    DeleteModalFocus::Permanent,
-                                ));
-                                ui.close();
-                            }
-                        });
-
                         // Paint full-row selection or hover background behind text
                         if is_selected {
                             ui.painter().set(
@@ -1313,8 +1329,21 @@ impl eframe::App for FreeDataDietApp {
                             );
                         }
 
-                        if row_click.clicked() || row_click.secondary_clicked() {
+                        if row_click.clicked() {
                             self.selected_path = Some(entry.path.clone());
+                        }
+                        if row_click.secondary_clicked() {
+                            self.selected_path = Some(entry.path.clone());
+                            let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+                            open_context_menu = Some(ActiveContextMenu {
+                                path: entry.path.clone(),
+                                name: entry.name.clone(),
+                                is_dir: entry.is_dir,
+                                is_system_protected: entry.is_system_protected,
+                                pos: pointer_pos,
+                                selected_idx: 0,
+                                just_opened: true,
+                            });
                         }
                         if row_click.double_clicked() {
                             if entry.is_dir {
@@ -1330,9 +1359,8 @@ impl eframe::App for FreeDataDietApp {
                     }
                 });
 
-            if let Some((modal, focus)) = context_delete {
-                self.delete_modal = modal;
-                self.modal_focus = focus;
+            if let Some(menu) = open_context_menu {
+                self.active_context_menu = Some(menu);
             }
 
             if let Some(target) = navigate_target {
@@ -1346,105 +1374,137 @@ impl eframe::App for FreeDataDietApp {
             }
         });
 
-        // --- KEYBOARD CONTEXT MENU WINDOW ---
-        if self.keyboard_context_menu_open {
-            let selected_entry = self.selected_path.as_ref().and_then(|p| {
-                self.entries.iter().find(|e| &e.path == p).cloned()
+        // --- UNIFIED CONTEXT MENU (KEYBOARD & MOUSE RIGHT-CLICK) ---
+        if let Some(mut menu) = self.active_context_menu.take() {
+            let items = get_context_menu_items(&menu);
+            let total_items = items.len();
+
+            let nav_down = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowDown)
+                    || i.key_pressed(egui::Key::J)
+                    || (!i.modifiers.shift && i.key_pressed(egui::Key::Tab))
+            });
+            let nav_up = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowUp)
+                    || i.key_pressed(egui::Key::K)
+                    || (i.modifiers.shift && i.key_pressed(egui::Key::Tab))
             });
 
-            if let Some(entry) = selected_entry {
-                let mut close_menu = false;
-                let mut menu_navigate = None;
-                let mut menu_delete: Option<(DeleteConfirmState, DeleteModalFocus)> = None;
+            if nav_down {
+                menu.selected_idx = (menu.selected_idx + 1) % total_items;
+            } else if nav_up {
+                menu.selected_idx = (menu.selected_idx + total_items - 1) % total_items;
+            }
 
-                egui::Window::new("Entry Actions")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(ui.ctx(), |ui| {
-                        ui.label(RichText::new(&entry.name).strong());
-                        ui.separator();
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+            let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
-                        if entry.is_dir {
-                            if ui.button("Open Folder").clicked() {
-                                menu_navigate = Some(entry.path.clone());
-                                close_menu = true;
-                            }
-                        } else if ui.button("Open / Launch File").clicked() {
-                            let _ = platform::open_file(&entry.path);
-                            close_menu = true;
-                        }
+            let mut close_menu = esc_pressed;
+            let mut triggered_action = None;
 
-                        if ui.button("Show in Windows Explorer").clicked() {
-                            let _ = platform::open_in_file_manager(&entry.path);
-                            close_menu = true;
-                        }
+            let window = egui::Window::new("context_menu_popup")
+                .title_bar(false)
+                .resizable(false)
+                .collapsible(false);
 
-                        if ui.button("Copy Full Path").clicked() {
-                            ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
-                            close_menu = true;
-                        }
-
-                        #[cfg(windows)]
-                        if ui.button("Windows Properties...").clicked() {
-                            let _ = platform::show_properties(&entry.path);
-                            close_menu = true;
-                        }
-
-                        ui.separator();
-
-                        if ui.button(
-                            RichText::new("Move to Recycle Bin")
-                                .color(Color32::from_rgb(255, 200, 100)),
-                        ).clicked() {
-                            menu_delete = Some((
-                                DeleteConfirmState::Confirm {
-                                    path: entry.path.clone(),
-                                    name: entry.name.clone(),
-                                    is_system: entry.is_system_protected,
-                                },
-                                DeleteModalFocus::Trash,
-                            ));
-                            close_menu = true;
-                        }
-
-                        if ui.button(
-                            RichText::new("Delete Permanently")
-                                .color(Color32::from_rgb(255, 100, 100)),
-                        ).clicked() {
-                            menu_delete = Some((
-                                DeleteConfirmState::Confirm {
-                                    path: entry.path.clone(),
-                                    name: entry.name.clone(),
-                                    is_system: entry.is_system_protected,
-                                },
-                                DeleteModalFocus::Permanent,
-                            ));
-                            close_menu = true;
-                        }
-
-                        ui.separator();
-                        if ui.button("Close Menu (Esc)").clicked() {
-                            close_menu = true;
-                        }
-                    });
-
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    close_menu = true;
-                }
-
-                if let Some(target) = menu_navigate {
-                    self.navigate_to(target);
-                }
-                if let Some((modal, focus)) = menu_delete {
-                    self.delete_modal = modal;
-                    self.modal_focus = focus;
-                }
-                if close_menu {
-                    self.keyboard_context_menu_open = false;
-                }
+            let window = if let Some(pos) = menu.pos {
+                window.fixed_pos(pos)
             } else {
-                self.keyboard_context_menu_open = false;
+                window.anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            };
+
+            let resp = window.show(ui.ctx(), |ui| {
+                ui.set_min_width(210.0);
+                ui.add_space(3.0);
+                ui.label(RichText::new(&menu.name).strong().color(Color32::WHITE));
+                ui.separator();
+
+                for (idx, item) in items.iter().enumerate() {
+                    if item.action == ContextAction::MoveToTrash {
+                        ui.separator();
+                    }
+
+                    let is_selected = menu.selected_idx == idx;
+                    let display_text = if is_selected {
+                        RichText::new(format!("▶  {}", item.label)).color(Color32::WHITE).strong()
+                    } else if let Some(color) = item.color {
+                        RichText::new(&item.label).color(color)
+                    } else {
+                        RichText::new(&item.label)
+                    };
+
+                    let btn = egui::Button::new(display_text)
+                        .fill(if is_selected {
+                            Color32::from_rgb(30, 100, 180)
+                        } else {
+                            Color32::TRANSPARENT
+                        });
+
+                    let btn_resp = ui.add_sized([ui.available_width(), 22.0], btn);
+
+                    if btn_resp.hovered() && !is_selected {
+                        menu.selected_idx = idx;
+                    }
+
+                    if btn_resp.clicked() || (is_selected && enter_pressed) {
+                        triggered_action = Some(item.action);
+                        close_menu = true;
+                    }
+                }
+                ui.add_space(3.0);
+            });
+
+            if let Some(wresp) = resp {
+                if !menu.just_opened && ui.input(|i| i.pointer.any_pressed()) {
+                    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                        if !wresp.response.rect.contains(pos) {
+                            close_menu = true;
+                        }
+                    }
+                }
+            }
+
+            if let Some(action) = triggered_action {
+                match action {
+                    ContextAction::Open => {
+                        if menu.is_dir {
+                            self.navigate_to(menu.path.clone());
+                        } else {
+                            let _ = platform::open_file(&menu.path);
+                        }
+                    }
+                    ContextAction::ShowInExplorer => {
+                        let _ = platform::open_in_file_manager(&menu.path);
+                    }
+                    ContextAction::CopyPath => {
+                        ui.ctx().copy_text(menu.path.to_string_lossy().to_string());
+                    }
+                    #[cfg(windows)]
+                    ContextAction::Properties => {
+                        let _ = platform::show_properties(&menu.path);
+                    }
+                    ContextAction::MoveToTrash => {
+                        self.delete_modal = DeleteConfirmState::Confirm {
+                            path: menu.path.clone(),
+                            name: menu.name.clone(),
+                            is_system: menu.is_system_protected,
+                        };
+                        self.modal_focus = DeleteModalFocus::Trash;
+                    }
+                    ContextAction::DeletePermanently => {
+                        self.delete_modal = DeleteConfirmState::Confirm {
+                            path: menu.path.clone(),
+                            name: menu.name.clone(),
+                            is_system: menu.is_system_protected,
+                        };
+                        self.modal_focus = DeleteModalFocus::Permanent;
+                    }
+                }
+            }
+
+            if !close_menu {
+                menu.just_opened = false;
+                self.active_context_menu = Some(menu);
             }
         }
 
