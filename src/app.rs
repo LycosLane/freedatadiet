@@ -537,7 +537,7 @@ impl eframe::App for FreeDataDietApp {
 
         // --- CENTRAL DATA TABLE PANEL ---
         egui::CentralPanel::default().show(ui, |ui| {
-            let total_width = ui.available_width();
+            let total_width = ui.available_width() - 14.0;
             let col_spacing = 6.0;
 
             let fixed_sum: f32 = self
@@ -773,113 +773,85 @@ impl eframe::App for FreeDataDietApp {
 
                             for &col in &self.config.column_order {
                                 let w = if col == ColumnId::Name { name_width } else { col.fixed_width() };
+                                let (cell_rect, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), egui::Sense::hover());
 
                                 match col {
                                     ColumnId::Name => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::left_to_right(egui::Align::Center),
-                                            |ui| {
-                                                // Type Badge
-                                                ui.add_sized(
-                                                    [44.0, 20.0],
-                                                    egui::Label::new(
-                                                        RichText::new(&badge).monospace().color(badge_color).strong(),
-                                                    ),
-                                                );
+                                        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell_rect));
+                                        child_ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                            // Type Badge
+                                            ui.add_sized(
+                                                [44.0, 20.0],
+                                                egui::Label::new(
+                                                    RichText::new(&badge).monospace().color(badge_color).strong(),
+                                                ),
+                                            );
 
-                                                // Name Label (highlighted if selected)
-                                                let name_color = if is_selected {
-                                                    Color32::from_rgb(120, 215, 255)
-                                                } else {
-                                                    Color32::WHITE
-                                                };
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(&entry.name).color(name_color).strong(),
-                                                    ).truncate(),
-                                                );
-                                            },
-                                        );
+                                            // Name Label (highlighted if selected)
+                                            let name_color = if is_selected {
+                                                Color32::from_rgb(120, 215, 255)
+                                            } else {
+                                                Color32::WHITE
+                                            };
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&entry.name).color(name_color).strong(),
+                                                ).truncate(),
+                                            );
+                                        });
                                     }
                                     ColumnId::Size => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.add_space(8.0);
-                                                ui.label(
-                                                    RichText::new(format_size(entry.size)).monospace(),
-                                                );
-                                            },
+                                        ui.painter().text(
+                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            format_size(entry.size),
+                                            egui::FontId::monospace(12.5),
+                                            Color32::from_rgb(220, 220, 220),
                                         );
                                     }
                                     ColumnId::AllocatedSize => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.add_space(8.0);
-                                                ui.label(
-                                                    RichText::new(format_size(entry.allocated_size))
-                                                        .monospace()
-                                                        .color(Color32::GRAY),
-                                                );
-                                            },
+                                        ui.painter().text(
+                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            format_size(entry.allocated_size),
+                                            egui::FontId::monospace(12.5),
+                                            Color32::GRAY,
                                         );
                                     }
                                     ColumnId::Usage => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::left_to_right(egui::Align::Center),
-                                            |ui| {
-                                                let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
-                                                let bar = ProgressBar::new(ratio)
-                                                    .text(format!("{:.1}%", ratio * 100.0))
-                                                    .desired_width(w - 10.0);
-                                                ui.add(bar);
-                                            },
-                                        );
+                                        let bar_rect = egui::Rect::from_center_size(cell_rect.center(), Vec2::new(w - 10.0, 16.0));
+                                        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
+                                        let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
+                                        let bar = ProgressBar::new(ratio)
+                                            .text(format!("{:.1}%", ratio * 100.0))
+                                            .desired_width(w - 10.0);
+                                        child_ui.add(bar);
                                     }
                                     ColumnId::Items => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.add_space(8.0);
-                                                if entry.is_dir {
-                                                    ui.label(
-                                                        RichText::new(format!("{}", entry.item_count))
-                                                            .monospace()
-                                                            .color(Color32::DARK_GRAY),
-                                                    );
-                                                } else {
-                                                    ui.label(
-                                                        RichText::new("-")
-                                                            .monospace()
-                                                            .color(Color32::DARK_GRAY),
-                                                    );
-                                                }
-                                            },
+                                        let txt = if entry.is_dir {
+                                            format!("{}", entry.item_count)
+                                        } else {
+                                            "-".to_string()
+                                        };
+                                        ui.painter().text(
+                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            txt,
+                                            egui::FontId::monospace(12.0),
+                                            Color32::DARK_GRAY,
                                         );
                                     }
                                     ColumnId::Modified => {
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(w, 20.0),
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.add_space(8.0);
-                                                let mod_str = entry
-                                                    .modified
-                                                    .map(crate::model::format_system_time)
-                                                    .unwrap_or_else(|| "-".to_string());
-                                                ui.label(
-                                                    RichText::new(mod_str)
-                                                        .monospace()
-                                                        .small()
-                                                        .color(Color32::GRAY),
-                                                );
-                                            },
+                                        let mod_str = entry
+                                            .modified
+                                            .map(crate::model::format_system_time)
+                                            .unwrap_or_else(|| "-".to_string());
+                                        ui.painter().text(
+                                            egui::pos2(cell_rect.max.x - 8.0, cell_rect.center().y),
+                                            egui::Align2::RIGHT_CENTER,
+                                            mod_str,
+                                            egui::FontId::monospace(11.5),
+                                            Color32::GRAY,
                                         );
                                     }
                                 }
