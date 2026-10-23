@@ -189,22 +189,108 @@ impl FreeDataDietApp {
 
         self.entries.sort_by(|a, b| {
             for rule in &rules {
-                let cmp = match rule.column {
+                let directed = match rule.column {
                     ColumnId::Type => {
                         let a_key = get_type_sort_key(a);
                         let b_key = get_type_sort_key(b);
-                        a_key.cmp(&b_key)
+                        let cmp = a_key.cmp(&b_key);
+                        match rule.direction {
+                            SortDirection::Ascending => cmp,
+                            SortDirection::Descending => cmp.reverse(),
+                        }
                     }
-                    ColumnId::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    ColumnId::Size | ColumnId::Usage => a.size.cmp(&b.size),
-                    ColumnId::AllocatedSize => a.allocated_size.cmp(&b.allocated_size),
-                    ColumnId::Items => a.item_count.cmp(&b.item_count),
-                    ColumnId::Modified => a.modified.cmp(&b.modified),
-                };
-
-                let directed = match rule.direction {
-                    SortDirection::Ascending => cmp,
-                    SortDirection::Descending => cmp.reverse(),
+                    ColumnId::Name => {
+                        let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+                        match rule.direction {
+                            SortDirection::Ascending => cmp,
+                            SortDirection::Descending => cmp.reverse(),
+                        }
+                    }
+                    ColumnId::Size | ColumnId::Usage => {
+                        if a.is_scanning != b.is_scanning {
+                            match rule.direction {
+                                SortDirection::Descending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Less
+                                    } else {
+                                        std::cmp::Ordering::Greater
+                                    }
+                                }
+                                SortDirection::Ascending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Greater
+                                    } else {
+                                        std::cmp::Ordering::Less
+                                    }
+                                }
+                            }
+                        } else {
+                            let cmp = a.size.cmp(&b.size);
+                            match rule.direction {
+                                SortDirection::Ascending => cmp,
+                                SortDirection::Descending => cmp.reverse(),
+                            }
+                        }
+                    }
+                    ColumnId::AllocatedSize => {
+                        if a.is_scanning != b.is_scanning {
+                            match rule.direction {
+                                SortDirection::Descending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Less
+                                    } else {
+                                        std::cmp::Ordering::Greater
+                                    }
+                                }
+                                SortDirection::Ascending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Greater
+                                    } else {
+                                        std::cmp::Ordering::Less
+                                    }
+                                }
+                            }
+                        } else {
+                            let cmp = a.allocated_size.cmp(&b.allocated_size);
+                            match rule.direction {
+                                SortDirection::Ascending => cmp,
+                                SortDirection::Descending => cmp.reverse(),
+                            }
+                        }
+                    }
+                    ColumnId::Items => {
+                        if a.is_scanning != b.is_scanning {
+                            match rule.direction {
+                                SortDirection::Descending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Less
+                                    } else {
+                                        std::cmp::Ordering::Greater
+                                    }
+                                }
+                                SortDirection::Ascending => {
+                                    if a.is_scanning {
+                                        std::cmp::Ordering::Greater
+                                    } else {
+                                        std::cmp::Ordering::Less
+                                    }
+                                }
+                            }
+                        } else {
+                            let cmp = a.item_count.cmp(&b.item_count);
+                            match rule.direction {
+                                SortDirection::Ascending => cmp,
+                                SortDirection::Descending => cmp.reverse(),
+                            }
+                        }
+                    }
+                    ColumnId::Modified => {
+                        let cmp = a.modified.cmp(&b.modified);
+                        match rule.direction {
+                            SortDirection::Ascending => cmp,
+                            SortDirection::Descending => cmp.reverse(),
+                        }
+                    }
                 };
 
                 if directed != std::cmp::Ordering::Equal {
