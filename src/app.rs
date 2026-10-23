@@ -53,35 +53,27 @@ struct ContextMenuItem {
     color: Option<Color32>,
 }
 
-fn get_context_menu_items(entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
+fn get_context_menu_items(_entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
     let mut items = Vec::new();
-    if entry.is_dir {
-        items.push(ContextMenuItem {
-            action: ContextAction::Open,
-            label: "Open Folder in FreeDataDiet".to_string(),
-            color: None,
-        });
-    } else {
-        items.push(ContextMenuItem {
-            action: ContextAction::Open,
-            label: "Open / Launch File".to_string(),
-            color: None,
-        });
-    }
+    items.push(ContextMenuItem {
+        action: ContextAction::Open,
+        label: "Open".to_string(),
+        color: None,
+    });
     items.push(ContextMenuItem {
         action: ContextAction::ShowInExplorer,
-        label: "Show in Windows Explorer".to_string(),
+        label: "Show in Explorer".to_string(),
         color: None,
     });
     items.push(ContextMenuItem {
         action: ContextAction::CopyPath,
-        label: "Copy Full Path".to_string(),
+        label: "Copy Path".to_string(),
         color: None,
     });
     #[cfg(windows)]
     items.push(ContextMenuItem {
         action: ContextAction::Properties,
-        label: "Windows Properties...".to_string(),
+        label: "Properties...".to_string(),
         color: None,
     });
     items.push(ContextMenuItem {
@@ -780,11 +772,7 @@ impl eframe::App for FreeDataDietApp {
                         ui.label(RichText::new("Actions").strong());
                         ui.add_space(4.0);
 
-                        if ui
-                            .button("Show in File Manager")
-                            .on_hover_text("Opens the native Explorer / file manager")
-                            .clicked()
-                        {
+                        if ui.button("Show in Explorer").clicked() {
                             let _ = platform::open_in_file_manager(&entry.path);
                         }
 
@@ -797,11 +785,7 @@ impl eframe::App for FreeDataDietApp {
                         }
 
                         #[cfg(windows)]
-                        if ui
-                            .button("Properties (Windows)")
-                            .on_hover_text("Opens the native Windows properties dialog")
-                            .clicked()
-                        {
+                        if ui.button("Properties").clicked() {
                             let _ = platform::show_properties(&entry.path);
                         }
 
@@ -900,11 +884,11 @@ impl eframe::App for FreeDataDietApp {
                         } else {
                             egui::CursorIcon::Grab
                         })
-                        .on_hover_text("Click to sort (multi-column: 1st=desc, 2nd=asc, 3rd=remove), drag to reorder");
+                        .on_hover_text("Click to sort, drag to reorder");
 
                     if col == ColumnId::Usage {
                         header_resp.context_menu(|ui| {
-                            ui.label(RichText::new("Usage Bar Percentage Basis (%)").strong());
+                            ui.label(RichText::new("Usage Bar Scaling").strong());
                             ui.separator();
                             for basis in [
                                 UsageBasis::LargestItem,
@@ -1957,9 +1941,9 @@ impl eframe::App for FreeDataDietApp {
                         ui.add_space(6.0);
                         ui.separator();
 
-                        // 2. Usage Percentage Basis (%)
-                        ui.label(RichText::new("Usage Bar Percentage Basis (%)").size(14.0).strong());
-                        ui.label(RichText::new("Choose what 100% represents on the visual usage bars:").weak().small());
+                        // 2. Usage Bar Scaling
+                        ui.label(RichText::new("Usage Bar Scaling").size(14.0).strong());
+                        ui.label(RichText::new("Scale usage bars relative to:").weak().small());
                         ui.add_space(2.0);
 
                         for basis in [
@@ -1982,17 +1966,16 @@ impl eframe::App for FreeDataDietApp {
                         ui.add_space(6.0);
                         ui.separator();
 
-                        // 3. Quick Search Mode
-                        ui.label(RichText::new("Quick Search Mode").size(14.0).strong());
-                        ui.label(RichText::new("Behavior when typing letters in the file list:").weak().small());
+                        // 3. Quick Search
+                        ui.label(RichText::new("Quick Search").size(14.0).strong());
                         ui.add_space(2.0);
 
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to item by name (Explorer style)").on_hover_text("Jumps selection to matching prefix; typing same key repeatedly cycles matches").clicked() {
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to name (Explorer style)").clicked() {
                             self.config.quick_search_mode = QuickSearchMode::JumpToPrefix;
                             self.quick_search_buffer.clear();
                             self.save_config();
                         }
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").on_hover_text("Dynamically filters visible table rows with search query banner").clicked() {
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").clicked() {
                             self.config.quick_search_mode = QuickSearchMode::LiveFilter;
                             self.quick_search_buffer.clear();
                             self.save_config();

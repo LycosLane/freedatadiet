@@ -88,28 +88,28 @@ pub enum UsageBasis {
 impl UsageBasis {
     pub fn title(&self) -> &'static str {
         match self {
-            UsageBasis::LargestItem => "Usage (% Max)",
-            UsageBasis::Folder => "Usage (% Dir)",
-            UsageBasis::DriveUsed => "Usage (% Used)",
-            UsageBasis::DriveTotal => "Usage (% Drive)",
+            UsageBasis::LargestItem => "Usage (Relative)",
+            UsageBasis::Folder => "Usage (Folder)",
+            UsageBasis::DriveUsed => "Usage (Used)",
+            UsageBasis::DriveTotal => "Usage (Drive)",
         }
     }
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            UsageBasis::LargestItem => "Largest Item in View (100% = biggest file/folder)",
-            UsageBasis::Folder => "Current Folder Total (100% = sum of folder)",
-            UsageBasis::DriveUsed => "Drive Used Space (100% = all used storage)",
-            UsageBasis::DriveTotal => "Drive Total Capacity (100% = full disk size)",
+            UsageBasis::LargestItem => "Relative to largest item",
+            UsageBasis::Folder => "Current folder total",
+            UsageBasis::DriveUsed => "Used drive space",
+            UsageBasis::DriveTotal => "Total drive capacity",
         }
     }
 
     pub fn description(&self) -> &'static str {
         match self {
-            UsageBasis::LargestItem => "The largest item fills the full 100% bar; all other items are scaled proportionally.",
-            UsageBasis::Folder => "Shows each item's share of this folder's total size (all items add up to 100%).",
-            UsageBasis::DriveUsed => "Shows how much of the partition's currently occupied disk space is taken by this item.",
-            UsageBasis::DriveTotal => "Shows how much of the partition's entire capacity (used + free space) is taken by this item.",
+            UsageBasis::LargestItem => "Largest item fills the bar; others scale proportionally.",
+            UsageBasis::Folder => "Each item's share of this folder.",
+            UsageBasis::DriveUsed => "Each item's share of all used space on the drive.",
+            UsageBasis::DriveTotal => "Each item's share of the entire drive capacity.",
         }
     }
 }

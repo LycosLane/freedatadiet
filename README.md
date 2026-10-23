@@ -1,8 +1,8 @@
 # FreeDataDiet
 
 > **Put your storage on a diet.**  
-> A lightning-fast, zero-bloat disk usage analyzer built in native Rust & egui.  
-> *Find what's eating your gigabytes — no subscriptions, no ads, no background services.*
+> A fast, zero-bloat disk usage analyzer built in native Rust & egui.  
+> *Find what is eating your gigabytes without subscriptions, ads, or background services.*
 
 [![Version: 0.5.0](https://img.shields.io/badge/version-0.5.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -14,24 +14,24 @@
 
 ## Why FreeDataDiet?
 
-Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection in commercial nagware, lock essential features behind 50€/year subscriptions, and push upgrade banners onto users.
+Commercial disk analyzers wrap basic filesystem inspection in nagware, lock essential features behind annual subscriptions, and push upgrade banners onto users.
 
-**FreeDataDiet** is built on a different philosophy:
-1. **100% Free & Open Source:** Zero paywalls, zero ads, zero telemetry.
-2. **Lightning Fast:** Written in Rust with parallel multithreaded directory traversal. Scans hundreds of thousands of files in seconds.
-3. **True Single Binary:** A portable executable with no runtime dependencies (no Electron, no webview, no background services).
-4. **Smart Exclude Filter:** Instantly skip developer caches (`.git`, `node_modules`, `target`, `.cache`, `.venv`) to save scan time and focus on what can actually be cleaned.
-5. **Effective Storage Awareness:** Displays both nominal file size (*Apparent Size*) and actual block allocation on disk (*Size on Disk* / Sparse Files / Cluster Alignment).
-6. **Built-in Safety Guards:** System-critical directories (`C:\Windows`, `/boot`, `/etc`) are protected with visual badges and warnings against accidental deletion.
-7. **Safe Delete:** Files are moved to the native OS Recycle Bin by default; permanent deletion requires explicit confirmation.
+**FreeDataDiet** is built on a simpler philosophy:
+1. **Free & Open Source:** No paywalls, no subscriptions, and no telemetry.
+2. **Fast & Parallel:** Multi-threaded directory traversal scans hundreds of thousands of files in seconds.
+3. **Portable Single Binary:** Runs directly without installers, background services, or webview bloat.
+4. **Developer Cache Filter:** Skip `.git`, `node_modules`, `target`, `.cache`, and `.venv` to focus on cleanable user data.
+5. **Apparent Size & Size on Disk:** Displays both nominal file size and actual cluster allocation on disk.
+6. **System Protection:** Visual badges and warnings protect system-critical directories (`C:\Windows`, `/boot`).
+7. **Safe Deletion:** Sends items to the native Recycle Bin by default, with explicit confirmation for permanent deletion.
 
 ---
 
-## Companion Tool
+## Companion Tools
 
 * **FreeDataDiet:** Analyze and trim overweight folders and files.
 * **FreeDopplerDiet:** Find and eliminate duplicate file clones.
-* **FreeWinly:** Pure, bloatware-free Windows maintenance engine.
+* **FreeWinly:** Bloatware-free Windows maintenance engine.
 
 ---
 
@@ -45,56 +45,48 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 | **Right Arrow** | Navigate into selected folder |
 | **Enter** | Enter selected directory or launch file |
 | **Backspace / Left** | Navigate up to parent directory |
-| **Typing Letters (Quick Search)** | Jump to item by name (Explorer style) or live filter visible rows (FilePilot style, configurable in Settings) |
-| **Esc** | Clear quick search filter or dismiss popups |
-| **Delete** | Move selected item to Recycle Bin / Trash (with keyboard-navigable confirmation modal) |
+| **Typing Letters (Quick Search)** | Jump to item by name (Explorer style) or live filter visible rows (FilePilot style) |
+| **Esc** | Clear search filter or close open dialogs |
+| **Delete** | Move selected item to Recycle Bin / Trash |
 | **Shift + Delete** | Permanently delete selected item (with confirmation) |
-| **Context Menu / Shift+F10** | Open context menu for selected item using the keyboard |
+| **Context Menu / Shift+F10** | Open context menu using the keyboard |
 | **Ctrl + H** | Toggle hidden files and folders |
 | **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
-| **Ctrl + ,  /  Alt + S** | Open Settings & Preferences dialog |
-| **F1  /  ?** | Toggle Keyboard Shortcuts cheat sheet (closes on any key press) |
-| **F5** | Rescan / refresh current directory |
+| **Ctrl + ,  /  Alt + S** | Open Settings dialog |
+| **F1  /  ?** | Open Keyboard Shortcuts cheat sheet |
+| **F5** | Refresh and rescan current directory |
 | **Double Click** | Enter directory or open file |
 | **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
-| **Header Drag & Drop** | Reorder table columns interactively (saved to `config.json`) |
-| **Header Click** | 3-state multi-column sort: 1st click = default direction, 2nd click = inverted direction, 3rd click = remove sort rule |
-| **`Restart as Admin`** | Elevate to Administrator permissions seamlessly |
+| **Header Click** | Sort by column (click again to invert, 3rd click resets) |
+| **Header Drag & Drop** | Reorder table columns interactively |
+| **`Restart as Admin`** | Elevate to Administrator permissions |
 
 ---
 
 ## Features & Highlights
 
-* **Immediate Discovery:** Shows all direct child folders immediately upon scan start, marking calculating folders with `[calculating]` / `Scanning...` so large folders like `Users` or `Windows` are never hidden while counting.
-* **Dedicated Type Column:** Clean `Type` column with aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keeping file and directory names strictly aligned.
-* **Dark & Light Modes:** Built-in Dark Mode, Light Mode, and automatic OS System theme detection with crisp contrast for badges, rows, and headers.
-* **Proportional & Relative Usage Bars (%):** Choose between 4 distinct visual scaling modes:
-  - *Largest Item in View (100% = biggest file/folder)*: The heaviest entry occupies the full 100% bar, and other items scale in proportion.
-  - *Current Folder Total (100% = sum of folder)*: Shows each item's share of the directory's total weight.
-  - *Drive Used Space (100% = all used storage)*: Shows share relative to total occupied disk space.
-  - *Drive Total Capacity (100% = full disk size)*: Shows share relative to the partition's entire capacity.
-* **Instant Keyboard Shortcuts Sheet (F1):** Press `F1` or `?` anytime for an instant shortcut cheat sheet modal that dismisses automatically on any key press.
-* **Quick Search Modes:** Choose between Windows Explorer-style *Jump-to-prefix* (cycles on repeated keys) or FilePilot-style *Live filtering* with instant feedback banner.
-* **Geometric Sort Arrows:** Crisp vector triangles drawn directly to guarantee identical baseline, dimensions, and zero unicode font fallback glitches.
-* **Hidden & System File Toggles:** Easily filter or reveal hidden and system-protected operating system items (such as `hiberfil.sys`, `pagefile.sys`, and NTFS junctions like `Documents and Settings`).
-* **Multi-Column Sorting:** Chain sorting criteria across multiple columns with visual priority badges (`Type 1`, `Size 2`).
-* **Safe Modal Keyboard Flow:** Delete and Trash modals respond immediately to `Enter` to confirm, `Esc` to cancel, and `Left`/`Right`/`Tab` to switch button focus.
-* **Stable Selection:** Selection remains anchored to the chosen item even as background scan updates re-sort rows.
+* **Live Discovery:** Folders appear immediately upon scan start with live size calculations.
+* **Type Badges:** Aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keep names strictly aligned.
+* **Themes:** Built-in Dark Mode, Light Mode, and automatic OS system theme detection.
+* **Usage Bar Scaling:** Scale bars relative to the largest item in view, current folder total, used drive space, or full disk capacity.
+* **Quick Search Modes:** Jump to files by typing a prefix (Explorer style) or live filter matching rows (FilePilot style).
+* **Keyboard Navigation:** Full keyboard support across table rows, menus, and delete confirmation modals.
+* **Stable Selection:** Selection remains anchored to the chosen item even as background updates re-sort rows.
 
 ---
 
 ## Configuration (`config.json`)
 
-FreeDataDiet stores settings in a clean, human-readable `config.json` next to the executable:
+Settings persist in a human-readable `config.json` next to the executable:
 * Theme (`"Dark"`, `"Light"`, `"System"`)
-* Usage bar percentage basis (`"LargestItem"`, `"Folder"`, `"DriveUsed"`, `"DriveTotal"`)
-* Column order & visibility (including `Type`, `Name`, `Size`, `AllocatedSize`, `Usage`, `Items`, `Modified`)
+* Usage bar scaling (`"LargestItem"`, `"Folder"`, `"DriveUsed"`, `"DriveTotal"`)
+* Column order & visibility
 * Multi-column sort rules
 * Show hidden / system files toggles
 * Quick search mode (`"JumpToPrefix"`, `"LiveFilter"`, `"Disabled"`)
 * Remember last visited path toggle (`remember_last_path`)
 * Last visited path (`last_path`)
-* Dev cache exclusion list & enabled state
+* Custom exclusion filter list & enabled state
 
 ---
 
