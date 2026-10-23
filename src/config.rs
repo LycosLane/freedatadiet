@@ -145,6 +145,47 @@ pub enum QuickSearchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutSettings {
+    #[serde(default = "default_true")]
+    pub f2_search_mode: bool,
+    #[serde(default = "default_true")]
+    pub f3_search_filter: bool,
+    #[serde(default = "default_true")]
+    pub f5_refresh: bool,
+    #[serde(default = "default_true")]
+    pub f11_fullscreen: bool,
+    #[serde(default = "default_true")]
+    pub f12_settings: bool,
+    #[serde(default = "default_true")]
+    pub ctrl_comma_settings: bool,
+    #[serde(default = "default_true")]
+    pub ctrl_h_hidden: bool,
+    #[serde(default = "default_true")]
+    pub ctrl_shift_h_system: bool,
+    #[serde(default = "default_true")]
+    pub delete_keys: bool,
+    #[serde(default = "default_true")]
+    pub arrow_navigation: bool,
+}
+
+impl Default for ShortcutSettings {
+    fn default() -> Self {
+        Self {
+            f2_search_mode: true,
+            f3_search_filter: true,
+            f5_refresh: true,
+            f11_fullscreen: true,
+            f12_settings: true,
+            ctrl_comma_settings: true,
+            ctrl_h_hidden: true,
+            ctrl_shift_h_system: true,
+            delete_keys: true,
+            arrow_navigation: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub column_order: Vec<ColumnId>,
     #[serde(default = "default_sort_rules")]
@@ -162,8 +203,8 @@ pub struct AppConfig {
     pub show_system_files: bool,
     #[serde(default = "default_true")]
     pub show_locked_folders: bool,
-    #[serde(default = "default_true")]
-    pub enable_shortcuts: bool,
+    #[serde(default)]
+    pub shortcuts: ShortcutSettings,
     #[serde(default)]
     pub quick_search_mode: QuickSearchMode,
     #[serde(default)]
@@ -183,7 +224,7 @@ impl Default for AppConfig {
             show_hidden_files: false,
             show_system_files: false,
             show_locked_folders: true,
-            enable_shortcuts: true,
+            shortcuts: ShortcutSettings::default(),
             quick_search_mode: QuickSearchMode::JumpToPrefix,
             theme: AppTheme::Dark,
         }
