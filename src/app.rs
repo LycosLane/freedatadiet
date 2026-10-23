@@ -109,7 +109,6 @@ pub struct FreeDataDietApp {
     // Exclude filters
     ignore_dev_caches: bool,
     custom_excludes: String,
-    show_exclude_bar: bool,
 
     scanner: Option<ScannerHandle>,
     is_scanning: bool,
@@ -153,7 +152,6 @@ impl FreeDataDietApp {
             drives,
             entries: Vec::new(),
             selected_path: None,
-            show_exclude_bar: false,
             scanner: None,
             is_scanning: false,
             scanned_counter: 0,
@@ -511,19 +509,88 @@ impl eframe::App for FreeDataDietApp {
                     self.navigate_up();
                 }
 
-                let text_edit = ui.add_sized(
-                    Vec2::new(ui.available_width() - 300.0, 24.0),
-                    egui::TextEdit::singleline(&mut self.path_input),
-                );
+                let mut do_browse = false;
+                let mut do_refresh = false;
 
-                if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let candidate = PathBuf::from(&self.path_input);
-                    if candidate.exists() {
-                        self.navigate_to(candidate);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("Settings", |ui| {
+                        ui.set_min_width(250.0);
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(format!("Usage Percentage Basis ({})", self.config.usage_basis.label())).strong());
+                        if ui.selectable_label(self.config.usage_basis == UsageBasis::Folder, "Current Folder").clicked() {
+                            self.config.usage_basis = UsageBasis::Folder;
+                            self.save_config();
+                            ui.close();
+                        }
+                        if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveUsed, "Drive (Used Space)").clicked() {
+                            self.config.usage_basis = UsageBasis::DriveUsed;
+                            self.save_config();
+                            ui.close();
+                        }
+                        if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveTotal, "Drive (Total Capacity)").clicked() {
+                            self.config.usage_basis = UsageBasis::DriveTotal;
+                            self.save_config();
+                            ui.close();
+                        }
+
+                        ui.separator();
+                        ui.label(RichText::new("File Filters").strong());
+                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files").on_hover_text("Show hidden files and dotfiles").changed() {
+                            self.save_config();
+                        }
+                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions").on_hover_text("Show protected system files and NTFS junctions (e.g. Documents and Settings)").changed() {
+                            self.save_config();
+                        }
+
+                        ui.separator();
+                        ui.label(RichText::new("Developer Cache Filter").strong());
+                        if ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches").changed() {
+                            self.config.ignore_dev_caches = self.ignore_dev_caches;
+                            self.save_config();
+                            self.trigger_scan();
+                        }
+                        ui.label(RichText::new("Custom Excludes:").small().color(Color32::GRAY));
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut self.custom_excludes)
+                                .hint_text(".git, node_modules, target, .cache")
+                        );
+                        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.config.custom_excludes = self.custom_excludes.clone();
+                            self.save_config();
+                            self.trigger_scan();
+                        }
+                        if ui.button("Apply Filter Changes").clicked() {
+                            self.config.custom_excludes = self.custom_excludes.clone();
+                            self.save_config();
+                            self.trigger_scan();
+                            ui.close();
+                        }
+                        ui.add_space(2.0);
+                    });
+
+                    if ui.button("Refresh").clicked() {
+                        do_refresh = true;
                     }
-                }
 
-                if ui.button("Browse...").clicked() {
+                    if ui.button("Browse...").clicked() {
+                        do_browse = true;
+                    }
+
+                    let path_width = (ui.available_width() - 8.0).max(120.0);
+                    let text_edit = ui.add_sized(
+                        Vec2::new(path_width, 24.0),
+                        egui::TextEdit::singleline(&mut self.path_input),
+                    );
+
+                    if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        let candidate = PathBuf::from(&self.path_input);
+                        if candidate.exists() {
+                            self.navigate_to(candidate);
+                        }
+                    }
+                });
+
+                if do_browse {
                     if let Some(folder) = rfd::FileDialog::new()
                         .set_directory(&self.current_path)
                         .pick_folder()
@@ -531,68 +598,10 @@ impl eframe::App for FreeDataDietApp {
                         self.navigate_to(folder);
                     }
                 }
-
-                if ui.button("Refresh").clicked() {
+                if do_refresh {
                     self.trigger_scan();
                 }
-
-                let filter_label = if self.show_exclude_bar {
-                    "Filter [-]"
-                } else {
-                    "Filter [+]"
-                };
-                if ui.button(filter_label).clicked() {
-                    self.show_exclude_bar = !self.show_exclude_bar;
-                }
-
-                ui.menu_button(format!("%: {}", self.config.usage_basis.label()), |ui| {
-                    if ui.selectable_label(self.config.usage_basis == UsageBasis::Folder, "Current Folder").clicked() {
-                        self.config.usage_basis = UsageBasis::Folder;
-                        self.save_config();
-                        ui.close();
-                    }
-                    if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveUsed, "Drive (Used Space)").clicked() {
-                        self.config.usage_basis = UsageBasis::DriveUsed;
-                        self.save_config();
-                        ui.close();
-                    }
-                    if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveTotal, "Drive (Total Capacity)").clicked() {
-                        self.config.usage_basis = UsageBasis::DriveTotal;
-                        self.save_config();
-                        ui.close();
-                    }
-                });
-
-                if ui.checkbox(&mut self.config.show_hidden_files, "Hidden").on_hover_text("Show hidden files and dotfiles").changed() {
-                    self.save_config();
-                }
-                if ui.checkbox(&mut self.config.show_system_files, "System").on_hover_text("Show protected system files and junctions (e.g. Documents and Settings)").changed() {
-                    self.save_config();
-                }
             });
-
-            // Exclude Filter Bar
-            if self.show_exclude_bar {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let prev_ignore = self.ignore_dev_caches;
-                    ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches:");
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut self.custom_excludes)
-                            .hint_text(".git, node_modules, target, .cache")
-                            .desired_width(ui.available_width() - 90.0),
-                    );
-
-                    let apply_btn = ui.button("Apply").clicked();
-                    if self.ignore_dev_caches != prev_ignore
-                        || apply_btn
-                        || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    {
-                        self.save_config();
-                        self.trigger_scan();
-                    }
-                });
-            }
 
             ui.add_space(6.0);
         });
@@ -633,7 +642,7 @@ impl eframe::App for FreeDataDietApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("[↑↓ / jk] Navigate  |  [Enter / →] Open  |  [Backspace / ←] Up  |  [Del] Trash  |  [Shift+Del] Delete")
+                        RichText::new("[Up/Down / jk] Navigate  |  [Enter / Right] Open  |  [Backspace / Left] Up  |  [Del] Trash  |  [Shift+Del] Delete")
                             .small()
                             .color(Color32::DARK_GRAY),
                     );
@@ -1426,7 +1435,7 @@ impl eframe::App for FreeDataDietApp {
 
                     let is_selected = menu.selected_idx == idx;
                     let display_text = if is_selected {
-                        RichText::new(format!("▶  {}", item.label)).color(Color32::WHITE).strong()
+                        RichText::new(format!(">  {}", item.label)).color(Color32::WHITE).strong()
                     } else if let Some(color) = item.color {
                         RichText::new(&item.label).color(color)
                     } else {
@@ -1564,7 +1573,7 @@ impl eframe::App for FreeDataDietApp {
                         // 1. Move to Trash (default selection)
                         let is_trash = self.modal_focus == DeleteModalFocus::Trash;
                         let trash_text = if is_trash {
-                            RichText::new("▶ Move to Trash ◀").color(Color32::WHITE).strong()
+                            RichText::new("> Move to Trash <").color(Color32::WHITE).strong()
                         } else {
                             RichText::new("Move to Trash")
                         };
@@ -1574,7 +1583,7 @@ impl eframe::App for FreeDataDietApp {
                         // 2. Delete Permanently
                         let is_perm = self.modal_focus == DeleteModalFocus::Permanent;
                         let perm_text = if is_perm {
-                            RichText::new("▶ Delete Permanently ◀").color(Color32::WHITE).strong()
+                            RichText::new("> Delete Permanently <").color(Color32::WHITE).strong()
                         } else {
                             RichText::new("Delete Permanently").color(Color32::from_rgb(255, 120, 120))
                         };
@@ -1584,7 +1593,7 @@ impl eframe::App for FreeDataDietApp {
                         // 3. Cancel
                         let is_cancel = self.modal_focus == DeleteModalFocus::Cancel;
                         let cancel_text = if is_cancel {
-                            RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
+                            RichText::new("> Cancel <").color(Color32::WHITE).strong()
                         } else {
                             RichText::new("Cancel")
                         };
