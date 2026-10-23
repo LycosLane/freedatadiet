@@ -10,8 +10,18 @@ use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
 #[derive(Clone, PartialEq)]
 enum DeleteConfirmState {
     None,
-    ConfirmPermanent(PathBuf, String, bool),
-    ConfirmTrash(PathBuf, String, bool),
+    Confirm {
+        path: PathBuf,
+        name: String,
+        is_system: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeleteModalFocus {
+    Trash,
+    Permanent,
+    Cancel,
 }
 
 pub struct FreeDataDietApp {
@@ -36,7 +46,7 @@ pub struct FreeDataDietApp {
     error_message: Option<String>,
 
     delete_modal: DeleteConfirmState,
-    modal_confirm_focused: bool,
+    modal_focus: DeleteModalFocus,
     keyboard_context_menu_open: bool,
     is_admin: bool,
 }
@@ -78,7 +88,7 @@ impl FreeDataDietApp {
             summary: None,
             error_message: None,
             delete_modal: DeleteConfirmState::None,
-            modal_confirm_focused: true,
+            modal_focus: DeleteModalFocus::Trash,
             keyboard_context_menu_open: false,
             is_admin,
         };
@@ -679,12 +689,12 @@ impl eframe::App for FreeDataDietApp {
                                 .color(Color32::from_rgb(255, 200, 100)),
                         );
                         if trash_btn.clicked() {
-                            self.delete_modal = DeleteConfirmState::ConfirmTrash(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
-                            );
-                            self.modal_confirm_focused = true;
+                            self.delete_modal = DeleteConfirmState::Confirm {
+                                path: entry.path.clone(),
+                                name: entry.name.clone(),
+                                is_system: entry.is_system_protected,
+                            };
+                            self.modal_focus = DeleteModalFocus::Trash;
                         }
 
                         let perm_btn = ui.button(
@@ -692,12 +702,12 @@ impl eframe::App for FreeDataDietApp {
                                 .color(Color32::from_rgb(255, 100, 100)),
                         );
                         if perm_btn.clicked() {
-                            self.delete_modal = DeleteConfirmState::ConfirmPermanent(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
-                            );
-                            self.modal_confirm_focused = true;
+                            self.delete_modal = DeleteConfirmState::Confirm {
+                                path: entry.path.clone(),
+                                name: entry.name.clone(),
+                                is_system: entry.is_system_protected,
+                            };
+                            self.modal_focus = DeleteModalFocus::Permanent;
                         }
                 } else {
                     ui.label(
@@ -932,7 +942,7 @@ impl eframe::App for FreeDataDietApp {
 
             let mut navigate_target = None;
             let mut scroll_to_selected = false;
-            let mut context_delete = None;
+            let mut context_delete: Option<(DeleteConfirmState, DeleteModalFocus)> = None;
             let mut do_navigate_up = false;
             let mut do_trigger_rescan = false;
 
@@ -1039,20 +1049,16 @@ impl eframe::App for FreeDataDietApp {
                 if del {
                     if let Some(vidx) = selected_visible_idx {
                         let entry = visible_entries[vidx].1;
-                        if shift {
-                            self.delete_modal = DeleteConfirmState::ConfirmPermanent(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
-                            );
+                        self.delete_modal = DeleteConfirmState::Confirm {
+                            path: entry.path.clone(),
+                            name: entry.name.clone(),
+                            is_system: entry.is_system_protected,
+                        };
+                        self.modal_focus = if shift {
+                            DeleteModalFocus::Permanent
                         } else {
-                            self.delete_modal = DeleteConfirmState::ConfirmTrash(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
-                            );
-                        }
-                        self.modal_confirm_focused = true;
+                            DeleteModalFocus::Trash
+                        };
                     }
                 }
 
@@ -1257,10 +1263,13 @@ impl eframe::App for FreeDataDietApp {
                                 RichText::new("Move to Recycle Bin")
                                     .color(Color32::from_rgb(255, 200, 100)),
                             ).clicked() {
-                                context_delete = Some(DeleteConfirmState::ConfirmTrash(
-                                    entry.path.clone(),
-                                    entry.name.clone(),
-                                    entry.is_system_protected,
+                                context_delete = Some((
+                                    DeleteConfirmState::Confirm {
+                                        path: entry.path.clone(),
+                                        name: entry.name.clone(),
+                                        is_system: entry.is_system_protected,
+                                    },
+                                    DeleteModalFocus::Trash,
                                 ));
                                 ui.close();
                             }
@@ -1269,10 +1278,13 @@ impl eframe::App for FreeDataDietApp {
                                 RichText::new("Delete Permanently")
                                     .color(Color32::from_rgb(255, 100, 100)),
                             ).clicked() {
-                                context_delete = Some(DeleteConfirmState::ConfirmPermanent(
-                                    entry.path.clone(),
-                                    entry.name.clone(),
-                                    entry.is_system_protected,
+                                context_delete = Some((
+                                    DeleteConfirmState::Confirm {
+                                        path: entry.path.clone(),
+                                        name: entry.name.clone(),
+                                        is_system: entry.is_system_protected,
+                                    },
+                                    DeleteModalFocus::Permanent,
                                 ));
                                 ui.close();
                             }
@@ -1318,9 +1330,9 @@ impl eframe::App for FreeDataDietApp {
                     }
                 });
 
-            if let Some(modal) = context_delete {
+            if let Some((modal, focus)) = context_delete {
                 self.delete_modal = modal;
-                self.modal_confirm_focused = true;
+                self.modal_focus = focus;
             }
 
             if let Some(target) = navigate_target {
@@ -1343,7 +1355,7 @@ impl eframe::App for FreeDataDietApp {
             if let Some(entry) = selected_entry {
                 let mut close_menu = false;
                 let mut menu_navigate = None;
-                let mut menu_delete = None;
+                let mut menu_delete: Option<(DeleteConfirmState, DeleteModalFocus)> = None;
 
                 egui::Window::new("Entry Actions")
                     .collapsible(false)
@@ -1385,10 +1397,13 @@ impl eframe::App for FreeDataDietApp {
                             RichText::new("Move to Recycle Bin")
                                 .color(Color32::from_rgb(255, 200, 100)),
                         ).clicked() {
-                            menu_delete = Some(DeleteConfirmState::ConfirmTrash(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
+                            menu_delete = Some((
+                                DeleteConfirmState::Confirm {
+                                    path: entry.path.clone(),
+                                    name: entry.name.clone(),
+                                    is_system: entry.is_system_protected,
+                                },
+                                DeleteModalFocus::Trash,
                             ));
                             close_menu = true;
                         }
@@ -1397,10 +1412,13 @@ impl eframe::App for FreeDataDietApp {
                             RichText::new("Delete Permanently")
                                 .color(Color32::from_rgb(255, 100, 100)),
                         ).clicked() {
-                            menu_delete = Some(DeleteConfirmState::ConfirmPermanent(
-                                entry.path.clone(),
-                                entry.name.clone(),
-                                entry.is_system_protected,
+                            menu_delete = Some((
+                                DeleteConfirmState::Confirm {
+                                    path: entry.path.clone(),
+                                    name: entry.name.clone(),
+                                    is_system: entry.is_system_protected,
+                                },
+                                DeleteModalFocus::Permanent,
                             ));
                             close_menu = true;
                         }
@@ -1418,9 +1436,9 @@ impl eframe::App for FreeDataDietApp {
                 if let Some(target) = menu_navigate {
                     self.navigate_to(target);
                 }
-                if let Some(modal) = menu_delete {
+                if let Some((modal, focus)) = menu_delete {
                     self.delete_modal = modal;
-                    self.modal_confirm_focused = true;
+                    self.modal_focus = focus;
                 }
                 if close_menu {
                     self.keyboard_context_menu_open = false;
@@ -1435,15 +1453,32 @@ impl eframe::App for FreeDataDietApp {
         let mut close_modal = false;
         let mut modal_error = None;
 
-        let current_modal = self.delete_modal.clone();
-        if current_modal != DeleteConfirmState::None {
-            let modal_toggle = ui.input(|i| {
-                i.key_pressed(egui::Key::ArrowLeft)
-                    || i.key_pressed(egui::Key::ArrowRight)
-                    || i.key_pressed(egui::Key::Tab)
+        if let DeleteConfirmState::Confirm { path, name, is_system } = &self.delete_modal {
+            let path = path.clone();
+            let name = name.clone();
+            let is_system = *is_system;
+
+            let nav_next = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowRight)
+                    || (!i.modifiers.shift && i.key_pressed(egui::Key::Tab))
             });
-            if modal_toggle {
-                self.modal_confirm_focused = !self.modal_confirm_focused;
+            let nav_prev = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowLeft)
+                    || (i.modifiers.shift && i.key_pressed(egui::Key::Tab))
+            });
+
+            if nav_next {
+                self.modal_focus = match self.modal_focus {
+                    DeleteModalFocus::Trash => DeleteModalFocus::Permanent,
+                    DeleteModalFocus::Permanent => DeleteModalFocus::Cancel,
+                    DeleteModalFocus::Cancel => DeleteModalFocus::Trash,
+                };
+            } else if nav_prev {
+                self.modal_focus = match self.modal_focus {
+                    DeleteModalFocus::Trash => DeleteModalFocus::Cancel,
+                    DeleteModalFocus::Permanent => DeleteModalFocus::Trash,
+                    DeleteModalFocus::Cancel => DeleteModalFocus::Permanent,
+                };
             }
 
             let modal_enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
@@ -1453,107 +1488,77 @@ impl eframe::App for FreeDataDietApp {
                 close_modal = true;
             }
 
-            match current_modal {
-                DeleteConfirmState::ConfirmTrash(path, name, is_system) => {
-                    egui::Window::new("Move to Recycle Bin?")
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                        .show(ui.ctx(), |ui| {
-                            if is_system {
-                                ui.label(RichText::new("[!] WARNING: Protected system path!").color(Color32::RED).strong());
+            egui::Window::new("Confirm Deletion")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    if is_system {
+                        ui.label(RichText::new("[!] WARNING: Protected system path! Deleting may break your operating system.").color(Color32::RED).strong());
+                        ui.add_space(4.0);
+                    }
+                    ui.label(RichText::new(format!("Do you want to delete \"{}\"?", name)).size(14.0));
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        // 1. Move to Trash (default selection)
+                        let is_trash = self.modal_focus == DeleteModalFocus::Trash;
+                        let trash_text = if is_trash {
+                            RichText::new("▶ Move to Trash ◀").color(Color32::WHITE).strong()
+                        } else {
+                            RichText::new("Move to Trash")
+                        };
+                        let trash_btn = egui::Button::new(trash_text)
+                            .fill(if is_trash { Color32::from_rgb(30, 110, 200) } else { Color32::from_rgb(50, 50, 50) });
+
+                        // 2. Delete Permanently
+                        let is_perm = self.modal_focus == DeleteModalFocus::Permanent;
+                        let perm_text = if is_perm {
+                            RichText::new("▶ Delete Permanently ◀").color(Color32::WHITE).strong()
+                        } else {
+                            RichText::new("Delete Permanently").color(Color32::from_rgb(255, 120, 120))
+                        };
+                        let perm_btn = egui::Button::new(perm_text)
+                            .fill(if is_perm { Color32::from_rgb(180, 40, 40) } else { Color32::from_rgb(50, 50, 50) });
+
+                        // 3. Cancel
+                        let is_cancel = self.modal_focus == DeleteModalFocus::Cancel;
+                        let cancel_text = if is_cancel {
+                            RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
+                        } else {
+                            RichText::new("Cancel")
+                        };
+                        let cancel_btn = egui::Button::new(cancel_text)
+                            .fill(if is_cancel { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
+
+                        let do_trash = ui.add(trash_btn).clicked() || (is_trash && modal_enter);
+                        let do_perm = ui.add(perm_btn).clicked() || (is_perm && modal_enter);
+                        let do_cancel = ui.add(cancel_btn).clicked() || (is_cancel && modal_enter);
+
+                        if do_trash {
+                            if let Err(e) = trash::delete(&path) {
+                                modal_error = Some(format!("Trash Error: {}", e));
+                            } else {
+                                trigger_rescan = true;
                             }
-                            ui.label(format!("Do you want to move \"{}\" to the Recycle Bin?", name));
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                let confirm_text = if self.modal_confirm_focused {
-                                    RichText::new("▶ Yes, Move to Trash ◀").color(Color32::WHITE).strong()
-                                } else {
-                                    RichText::new("Yes, Move to Trash")
-                                };
-                                let confirm_btn = egui::Button::new(confirm_text)
-                                    .fill(if self.modal_confirm_focused { Color32::from_rgb(30, 100, 180) } else { Color32::from_rgb(50, 50, 50) });
-
-                                let cancel_text = if !self.modal_confirm_focused {
-                                    RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
-                                } else {
-                                    RichText::new("Cancel")
-                                };
-                                let cancel_btn = egui::Button::new(cancel_text)
-                                    .fill(if !self.modal_confirm_focused { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
-
-                                let do_confirm = ui.add(confirm_btn).clicked() || (self.modal_confirm_focused && modal_enter);
-                                let do_cancel = ui.add(cancel_btn).clicked() || (!self.modal_confirm_focused && modal_enter);
-
-                                if do_confirm {
-                                    if let Err(e) = trash::delete(&path) {
-                                        modal_error = Some(format!("Trash Error: {}", e));
-                                    } else {
-                                        trigger_rescan = true;
-                                    }
-                                    close_modal = true;
-                                } else if do_cancel {
-                                    close_modal = true;
-                                }
-                            });
-                        });
-                }
-                DeleteConfirmState::ConfirmPermanent(path, name, is_system) => {
-                    egui::Window::new("Delete Permanently?")
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                        .show(ui.ctx(), |ui| {
-                            if is_system {
-                                ui.label(RichText::new("[CRITICAL WARNING] This is a SYSTEM PATH! Deleting it may break your operating system!").color(Color32::RED).strong());
-                                ui.add_space(4.0);
+                            close_modal = true;
+                        } else if do_perm {
+                            let res = if path.is_dir() {
+                                std::fs::remove_dir_all(&path)
+                            } else {
+                                std::fs::remove_file(&path)
+                            };
+                            if let Err(e) = res {
+                                modal_error = Some(format!("Delete Error: {}", e));
+                            } else {
+                                trigger_rescan = true;
                             }
-                            ui.label(RichText::new(format!(
-                                "[DANGER] \"{}\" will be permanently deleted from disk!",
-                                name
-                            )).color(Color32::RED).strong());
-                            ui.label("This action cannot be undone.");
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                let confirm_text = if self.modal_confirm_focused {
-                                    RichText::new("▶ Yes, Delete Permanently ◀").color(Color32::WHITE).strong()
-                                } else {
-                                    RichText::new("Yes, Delete Permanently").color(Color32::from_rgb(255, 100, 100))
-                                };
-                                let confirm_btn = egui::Button::new(confirm_text)
-                                    .fill(if self.modal_confirm_focused { Color32::from_rgb(180, 40, 40) } else { Color32::from_rgb(50, 50, 50) });
-
-                                let cancel_text = if !self.modal_confirm_focused {
-                                    RichText::new("▶ Cancel ◀").color(Color32::WHITE).strong()
-                                } else {
-                                    RichText::new("Cancel")
-                                };
-                                let cancel_btn = egui::Button::new(cancel_text)
-                                    .fill(if !self.modal_confirm_focused { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
-
-                                let do_confirm = ui.add(confirm_btn).clicked() || (self.modal_confirm_focused && modal_enter);
-                                let do_cancel = ui.add(cancel_btn).clicked() || (!self.modal_confirm_focused && modal_enter);
-
-                                if do_confirm {
-                                    let res = if path.is_dir() {
-                                        std::fs::remove_dir_all(&path)
-                                    } else {
-                                        std::fs::remove_file(&path)
-                                    };
-                                    if let Err(e) = res {
-                                        modal_error = Some(format!("Delete Error: {}", e));
-                                    } else {
-                                        trigger_rescan = true;
-                                    }
-                                    close_modal = true;
-                                } else if do_cancel {
-                                    close_modal = true;
-                                }
-                            });
-                        });
-                }
-                DeleteConfirmState::None => {}
-            }
+                            close_modal = true;
+                        } else if do_cancel {
+                            close_modal = true;
+                        }
+                    });
+                });
         }
 
         if let Some(err) = modal_error {
