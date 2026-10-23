@@ -361,7 +361,7 @@ impl eframe::App for FreeDataDietApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("Doppelklick: Hineinnavigieren  |  Auswahl für Details & Aktionen")
+                        RichText::new("[↑↓ / jk] Navigieren  |  [Enter / →] Hinein  |  [Backspace / ←] Zurück  |  [Entf] Papierkorb")
                             .small()
                             .color(Color32::DARK_GRAY),
                     );
@@ -551,6 +551,76 @@ impl eframe::App for FreeDataDietApp {
                 .max(1) as f32;
 
             let mut navigate_target = None;
+            let mut scroll_to_selected = false;
+
+            // Keyboard navigation (active when not typing in text input)
+            if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None {
+                let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::J));
+                let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::K));
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::ArrowRight));
+                let back = ui.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::ArrowLeft));
+                let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
+                let shift = ui.input(|i| i.modifiers.shift);
+                let refresh = ui.input(|i| i.key_pressed(egui::Key::F5));
+
+                if down && !self.entries.is_empty() {
+                    let next = match self.selected_index {
+                        Some(idx) => (idx + 1).min(self.entries.len().saturating_sub(1)),
+                        None => 0,
+                    };
+                    self.selected_index = Some(next);
+                    scroll_to_selected = true;
+                }
+
+                if up && !self.entries.is_empty() {
+                    let prev = match self.selected_index {
+                        Some(idx) => idx.saturating_sub(1),
+                        None => 0,
+                    };
+                    self.selected_index = Some(prev);
+                    scroll_to_selected = true;
+                }
+
+                if enter {
+                    if let Some(idx) = self.selected_index {
+                        if let Some(entry) = self.entries.get(idx) {
+                            if entry.is_dir {
+                                navigate_target = Some(entry.path.clone());
+                            } else {
+                                let _ = platform::open_file(&entry.path);
+                            }
+                        }
+                    }
+                }
+
+                if back {
+                    self.navigate_up();
+                }
+
+                if del {
+                    if let Some(idx) = self.selected_index {
+                        if let Some(entry) = self.entries.get(idx) {
+                            if shift {
+                                self.delete_modal = DeleteConfirmState::ConfirmPermanent(
+                                    entry.path.clone(),
+                                    entry.name.clone(),
+                                    entry.is_system_protected,
+                                );
+                            } else {
+                                self.delete_modal = DeleteConfirmState::ConfirmTrash(
+                                    entry.path.clone(),
+                                    entry.name.clone(),
+                                    entry.is_system_protected,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if refresh {
+                    self.trigger_scan();
+                }
+            }
 
             ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -610,6 +680,10 @@ impl eframe::App for FreeDataDietApp {
 
                             lbl
                         }).inner;
+
+                        if is_selected && scroll_to_selected {
+                            row_resp.scroll_to_me(Some(egui::Align::Center));
+                        }
 
                         if row_resp.clicked() {
                             self.selected_index = Some(i);
