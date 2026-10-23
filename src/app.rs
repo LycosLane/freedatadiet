@@ -129,6 +129,8 @@ pub struct FreeDataDietApp {
     modal_focus: DeleteModalFocus,
     active_context_menu: Option<ActiveContextMenu>,
     show_settings_modal: bool,
+    settings_just_opened: bool,
+    settings_selected_idx: usize,
     show_shortcuts_modal: bool,
     shortcuts_just_opened: bool,
     status_toast: Option<(String, Instant)>,
@@ -182,6 +184,8 @@ impl FreeDataDietApp {
             modal_focus: DeleteModalFocus::Trash,
             active_context_menu: None,
             show_settings_modal: false,
+            settings_just_opened: false,
+            settings_selected_idx: 0,
             show_shortcuts_modal: false,
             shortcuts_just_opened: false,
             status_toast: None,
@@ -466,7 +470,7 @@ fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32, &'stati
         (
             "[JUNC]".to_string(),
             if is_dark { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(130, 70, 200) },
-            "Junction: NTFS junction or symbolic link",
+            "Junction: Windows directory junction (shortcut link to another folder)",
         )
     } else if entry.is_system_protected {
         (
@@ -570,6 +574,7 @@ impl eframe::App for FreeDataDietApp {
 
                 if (ctrl && comma_pressed) || f12_pressed {
                     self.show_settings_modal = !self.show_settings_modal;
+                    self.settings_just_opened = self.show_settings_modal;
                 } else if f5_pressed {
                     self.trigger_scan();
                 } else if f2_pressed {
@@ -659,6 +664,7 @@ impl eframe::App for FreeDataDietApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Settings (Ctrl+,)").clicked() {
                         self.show_settings_modal = true;
+                        self.settings_just_opened = true;
                     }
 
                     if ui.button("Refresh (F5)").clicked() {
@@ -1810,12 +1816,12 @@ impl eframe::App for FreeDataDietApp {
             let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
             let mut close_shortcuts = esc_pressed;
 
-            egui::Window::new("Keyboard Shortcuts")
+            let win_resp = egui::Window::new("Keyboard Shortcuts")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.set_min_width(540.0);
+                    ui.set_min_width(560.0);
                     ui.add_space(4.0);
 
                     ui.horizontal(|ui| {
@@ -1849,30 +1855,35 @@ impl eframe::App for FreeDataDietApp {
                             };
 
                             add_sec(ui, "Navigation");
-                            add_row(ui, "Up / Down", "Navigate selection through folder rows");
+                            add_row(ui, "Up / Down", "Move selection through folder rows");
+                            add_row(ui, "Right / Enter", "Enter selected folder or launch file");
+                            add_row(ui, "Left / Backspace", "Navigate up to parent directory");
                             add_row(ui, "Home / End", "Jump to first / last item in current folder");
                             add_row(ui, "PageUp / PageDown", "Scroll up / down by 15 items");
-                            add_row(ui, "Enter / Right Arrow", "Enter selected folder or launch file");
-                            add_row(ui, "Backspace / Left Arrow", "Navigate up to parent directory");
 
                             add_sec(ui, "Quick Search");
                             add_row(ui, "F2", "Cycle search mode (Jump to Prefix vs Live Filter)");
                             add_row(ui, "F3", "Activate Live Filter search bar");
-                            add_row(ui, "Typing Letters", "Jump to prefix (Explorer) or Live filter list (FilePilot)");
+                            add_row(ui, "A-Z, 0-9", "Jump to prefix (Explorer) or Live filter list (FilePilot)");
                             add_row(ui, "Esc", "Clear active search filter query or dismiss popup");
 
                             add_sec(ui, "File Operations");
                             add_row(ui, "Del", "Move selected item to Recycle Bin / Trash");
                             add_row(ui, "Shift + Del", "Permanently delete selected item (with confirmation)");
-                            add_row(ui, "Context Key / Shift+F10", "Open right-click context menu using keyboard");
+                            add_row(ui, "Menu / Shift+F10", "Open right-click context menu using keyboard");
                             add_row(ui, "F5", "Refresh and rescan current directory");
 
                             add_sec(ui, "Preferences & View");
-                            add_row(ui, "Ctrl + H", "Toggle hidden files and folders");
-                            add_row(ui, "Ctrl + Shift + H", "Toggle protected system files & NTFS junctions");
+                            add_row(ui, "F1", "Toggle this Keyboard Shortcuts cheat sheet");
                             add_row(ui, "F11", "Toggle fullscreen mode");
                             add_row(ui, "F12  /  Ctrl + ,", "Open Settings & Preferences dialog");
-                            add_row(ui, "F1  /  ?", "Toggle this Keyboard Shortcuts cheat sheet");
+                            add_row(ui, "Ctrl + H", "Toggle hidden files and folders");
+                            add_row(ui, "Ctrl + Shift + H", "Toggle protected system files & NTFS junctions");
+
+                            add_sec(ui, "Dialog & Menu Controls");
+                            add_row(ui, "Up / Down / Tab", "Navigate options inside Settings dialog");
+                            add_row(ui, "Space / Enter", "Toggle selected checkbox or click button");
+                            add_row(ui, "Esc / Click Outside", "Close dialogs, menus, or search filter");
                         });
 
                     ui.add_space(8.0);
@@ -1880,7 +1891,7 @@ impl eframe::App for FreeDataDietApp {
                     ui.add_space(4.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Press Esc or click Close to return").weak().small());
+                        ui.label(RichText::new("Press Esc or click outside to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close (Esc)").clicked() {
                                 close_shortcuts = true;
@@ -1888,6 +1899,20 @@ impl eframe::App for FreeDataDietApp {
                         });
                     });
                 });
+
+            if let Some(resp) = win_resp {
+                if !self.shortcuts_just_opened && ui.input(|i| i.pointer.any_pressed()) {
+                    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                        if !resp.response.rect.contains(pos) {
+                            close_shortcuts = true;
+                        }
+                    }
+                }
+            }
+
+            if self.shortcuts_just_opened {
+                self.shortcuts_just_opened = false;
+            }
 
             if close_shortcuts {
                 self.show_shortcuts_modal = false;
@@ -1899,20 +1924,60 @@ impl eframe::App for FreeDataDietApp {
             let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape));
             let mut trigger_rescan = false;
 
-            egui::Window::new("Settings & Preferences")
+            let nav_down = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowDown)
+                    || (!i.modifiers.shift && i.key_pressed(egui::Key::Tab))
+            });
+            let nav_up = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowUp)
+                    || (i.modifiers.shift && i.key_pressed(egui::Key::Tab))
+            });
+            let activate = !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+
+            const TOTAL_SETTINGS_ITEMS: usize = 19;
+            if nav_down {
+                self.settings_selected_idx = (self.settings_selected_idx + 1) % TOTAL_SETTINGS_ITEMS;
+            } else if nav_up {
+                self.settings_selected_idx = (self.settings_selected_idx + TOTAL_SETTINGS_ITEMS - 1) % TOTAL_SETTINGS_ITEMS;
+            }
+
+            let sel_idx = self.settings_selected_idx;
+
+            let win_resp = egui::Window::new("Settings & Preferences")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.set_min_width(520.0);
+                    ui.set_min_width(540.0);
                     ui.add_space(4.0);
 
                     egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                        // Focus drawing helper
+                        let draw_focus = |ui: &mut egui::Ui, resp: &egui::Response, item_idx: usize| {
+                            if sel_idx == item_idx {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                                ui.painter().rect_stroke(
+                                    resp.rect.expand(2.0),
+                                    3.0,
+                                    egui::Stroke::new(1.5, Color32::from_rgb(100, 180, 255)),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
+                        };
+
                         // 1. Theme
                         ui.label(RichText::new("Theme & Appearance").size(14.0).strong());
                         ui.horizontal(|ui| {
-                            for theme in [AppTheme::Dark, AppTheme::Light, AppTheme::System] {
-                                if ui.selectable_label(self.config.theme == theme, theme.label()).clicked() {
+                            let themes = [(0, AppTheme::Dark), (1, AppTheme::Light), (2, AppTheme::System)];
+                            for (t_idx, theme) in themes {
+                                let label_text = if sel_idx == t_idx {
+                                    format!("> {}", theme.label())
+                                } else {
+                                    theme.label().to_string()
+                                };
+                                let resp = ui.selectable_label(self.config.theme == theme, label_text);
+                                draw_focus(ui, &resp, t_idx);
+                                if resp.clicked() || (sel_idx == t_idx && activate) {
                                     self.config.theme = theme;
                                     self.save_config();
                                 }
@@ -1927,14 +1992,22 @@ impl eframe::App for FreeDataDietApp {
                         ui.label(RichText::new("Scale usage bars relative to:").weak().small());
                         ui.add_space(2.0);
 
-                        for basis in [
-                            UsageBasis::LargestItem,
-                            UsageBasis::Folder,
-                            UsageBasis::DriveUsed,
-                            UsageBasis::DriveTotal,
-                        ] {
+                        let bases = [
+                            (3, UsageBasis::LargestItem),
+                            (4, UsageBasis::Folder),
+                            (5, UsageBasis::DriveUsed),
+                            (6, UsageBasis::DriveTotal),
+                        ];
+                        for (b_idx, basis) in bases {
                             let is_chosen = self.config.usage_basis == basis;
-                            if ui.selectable_label(is_chosen, RichText::new(basis.display_name()).strong()).clicked() {
+                            let title = if sel_idx == b_idx {
+                                format!("> {}", basis.display_name())
+                            } else {
+                                basis.display_name().to_string()
+                            };
+                            let resp = ui.selectable_label(is_chosen, RichText::new(title).strong());
+                            draw_focus(ui, &resp, b_idx);
+                            if resp.clicked() || (sel_idx == b_idx && activate) {
                                 self.config.usage_basis = basis;
                                 self.save_config();
                             }
@@ -1951,20 +2024,24 @@ impl eframe::App for FreeDataDietApp {
                         ui.label(RichText::new("Quick Search").size(14.0).strong());
                         ui.add_space(2.0);
 
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to name (Explorer style)").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::JumpToPrefix;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
-                        }
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
-                        }
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::Disabled, "Disabled").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::Disabled;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
+                        let s_modes = [
+                            (7, QuickSearchMode::JumpToPrefix, "Jump to name (Explorer style)"),
+                            (8, QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)"),
+                            (9, QuickSearchMode::Disabled, "Disabled"),
+                        ];
+                        for (m_idx, mode, label) in s_modes {
+                            let title = if sel_idx == m_idx {
+                                format!("> {}", label)
+                            } else {
+                                label.to_string()
+                            };
+                            let resp = ui.selectable_label(self.config.quick_search_mode == mode, title);
+                            draw_focus(ui, &resp, m_idx);
+                            if resp.clicked() || (sel_idx == m_idx && activate) {
+                                self.config.quick_search_mode = mode;
+                                self.quick_search_buffer.clear();
+                                self.save_config();
+                            }
                         }
 
                         ui.add_space(6.0);
@@ -1972,15 +2049,32 @@ impl eframe::App for FreeDataDietApp {
 
                         // 4. File Visibility
                         ui.label(RichText::new("File Visibility").size(14.0).strong());
-                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)").on_hover_text("Show hidden files and dotfiles").changed() {
+                        let resp_h = ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)").on_hover_text("Show hidden files and dotfiles");
+                        draw_focus(ui, &resp_h, 10);
+                        if resp_h.changed() || (sel_idx == 10 && activate) {
+                            if sel_idx == 10 && activate {
+                                self.config.show_hidden_files = !self.config.show_hidden_files;
+                            }
                             self.save_config();
                             self.sort_entries();
                         }
-                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions (Ctrl+Shift+H)").on_hover_text("Show protected system files and NTFS junctions").changed() {
+
+                        let resp_s = ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions (Ctrl+Shift+H)").on_hover_text("Show protected system files and NTFS junctions");
+                        draw_focus(ui, &resp_s, 11);
+                        if resp_s.changed() || (sel_idx == 11 && activate) {
+                            if sel_idx == 11 && activate {
+                                self.config.show_system_files = !self.config.show_system_files;
+                            }
                             self.save_config();
                             self.sort_entries();
                         }
-                        if ui.checkbox(&mut self.config.show_locked_folders, "Show Locked Folders").on_hover_text("Show folders that cannot be scanned due to permission restrictions").changed() {
+
+                        let resp_l = ui.checkbox(&mut self.config.show_locked_folders, "Show Locked Folders").on_hover_text("Show folders that cannot be scanned due to permission restrictions");
+                        draw_focus(ui, &resp_l, 12);
+                        if resp_l.changed() || (sel_idx == 12 && activate) {
+                            if sel_idx == 12 && activate {
+                                self.config.show_locked_folders = !self.config.show_locked_folders;
+                            }
                             self.save_config();
                             self.sort_entries();
                         }
@@ -1990,10 +2084,21 @@ impl eframe::App for FreeDataDietApp {
 
                         // 5. Application Preferences
                         ui.label(RichText::new("Application Preferences").size(14.0).strong());
-                        if ui.checkbox(&mut self.config.enable_shortcuts, "Enable Keyboard Shortcuts").on_hover_text("Allow F-keys and Ctrl shortcuts (disable if conflicting with tiling WM)").changed() {
+                        let resp_k = ui.checkbox(&mut self.config.enable_shortcuts, "Enable Keyboard Shortcuts").on_hover_text("Allow F-keys and Ctrl shortcuts (disable if conflicting with tiling WM)");
+                        draw_focus(ui, &resp_k, 13);
+                        if resp_k.changed() || (sel_idx == 13 && activate) {
+                            if sel_idx == 13 && activate {
+                                self.config.enable_shortcuts = !self.config.enable_shortcuts;
+                            }
                             self.save_config();
                         }
-                        if ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup").changed() {
+
+                        let resp_r = ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup");
+                        draw_focus(ui, &resp_r, 14);
+                        if resp_r.changed() || (sel_idx == 14 && activate) {
+                            if sel_idx == 14 && activate {
+                                self.config.remember_last_path = !self.config.remember_last_path;
+                            }
                             if !self.config.remember_last_path {
                                 self.config.last_path = None;
                             }
@@ -2005,11 +2110,17 @@ impl eframe::App for FreeDataDietApp {
 
                         // 6. Developer Cache Filter
                         ui.label(RichText::new("Developer Cache Filter").size(14.0).strong());
-                        if ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches (.git, node_modules, target, .cache, .venv)").changed() {
+                        let resp_d = ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches (.git, node_modules, target, .cache, .venv)");
+                        draw_focus(ui, &resp_d, 15);
+                        if resp_d.changed() || (sel_idx == 15 && activate) {
+                            if sel_idx == 15 && activate {
+                                self.ignore_dev_caches = !self.ignore_dev_caches;
+                            }
                             self.config.ignore_dev_caches = self.ignore_dev_caches;
                             self.save_config();
                             trigger_rescan = true;
                         }
+
                         ui.label(RichText::new("Custom Exclude Names (comma-separated):").weak().small());
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.custom_excludes)
@@ -2020,7 +2131,10 @@ impl eframe::App for FreeDataDietApp {
                             self.save_config();
                             trigger_rescan = true;
                         }
-                        if ui.button("Apply Filter Changes").clicked() {
+
+                        let resp_apply = ui.button("Apply Filter Changes");
+                        draw_focus(ui, &resp_apply, 16);
+                        if resp_apply.clicked() || (sel_idx == 16 && activate) {
                             self.config.custom_excludes = self.custom_excludes.clone();
                             self.save_config();
                             trigger_rescan = true;
@@ -2030,7 +2144,9 @@ impl eframe::App for FreeDataDietApp {
                         ui.separator();
 
                         // 7. Shortcuts Sheet
-                        if ui.button("View Keyboard Shortcuts (F1)").clicked() {
+                        let resp_sc = ui.button("View Keyboard Shortcuts (F1)");
+                        draw_focus(ui, &resp_sc, 17);
+                        if resp_sc.clicked() || (sel_idx == 17 && activate) {
                             self.show_shortcuts_modal = true;
                             self.shortcuts_just_opened = true;
                         }
@@ -2038,12 +2154,38 @@ impl eframe::App for FreeDataDietApp {
 
                     ui.add_space(8.0);
                     ui.separator();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Done (Esc)").clicked() {
-                            close_settings = true;
-                        }
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Press Esc or click outside to return").weak().small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let resp_done = ui.button("Done (Esc)");
+                            if sel_idx == 18 {
+                                ui.painter().rect_stroke(
+                                    resp_done.rect.expand(2.0),
+                                    3.0,
+                                    egui::Stroke::new(1.5, Color32::from_rgb(100, 180, 255)),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
+                            if resp_done.clicked() || (sel_idx == 18 && activate) {
+                                close_settings = true;
+                            }
+                        });
                     });
                 });
+
+            if let Some(resp) = win_resp {
+                if !self.settings_just_opened && ui.input(|i| i.pointer.any_pressed()) {
+                    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                        if !resp.response.rect.contains(pos) {
+                            close_settings = true;
+                        }
+                    }
+                }
+            }
+
+            if self.settings_just_opened {
+                self.settings_just_opened = false;
+            }
 
             if close_settings {
                 self.show_settings_modal = false;
