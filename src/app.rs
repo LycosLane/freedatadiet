@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
 
+use crate::config::{AppConfig, ColumnId};
 use crate::model::{format_size, DriveInfo, FileEntry, SortBy, SortDirection};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
@@ -15,6 +16,9 @@ enum DeleteConfirmState {
 }
 
 pub struct FreeDataDietApp {
+    config: AppConfig,
+    dragged_column_idx: Option<usize>,
+
     current_path: PathBuf,
     path_input: String,
     drives: Vec<DriveInfo>,
@@ -41,25 +45,36 @@ pub struct FreeDataDietApp {
 
 impl FreeDataDietApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let config = AppConfig::load();
         let drives = platform::get_drives();
         let is_admin = platform::is_admin();
 
-        let start_path = if let Some(first_drive) = drives.first() {
+        let start_path = if let Some(ref last) = config.last_path {
+            if last.is_dir() {
+                last.clone()
+            } else if let Some(first_drive) = drives.first() {
+                first_drive.path.clone()
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            }
+        } else if let Some(first_drive) = drives.first() {
             first_drive.path.clone()
         } else {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         };
 
         let mut app = Self {
+            sort_by: config.sort_by,
+            sort_dir: config.sort_direction,
+            ignore_dev_caches: config.ignore_dev_caches,
+            custom_excludes: config.custom_excludes.clone(),
+            config,
+            dragged_column_idx: None,
             path_input: start_path.to_string_lossy().to_string(),
             current_path: start_path,
             drives,
             entries: Vec::new(),
             selected_index: None,
-            sort_by: SortBy::Size,
-            sort_dir: SortDirection::Descending,
-            ignore_dev_caches: true,
-            custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
             show_exclude_bar: false,
             scanner: None,
             is_scanning: false,
@@ -72,6 +87,15 @@ impl FreeDataDietApp {
 
         app.trigger_scan();
         app
+    }
+
+    fn save_config(&mut self) {
+        self.config.sort_by = self.sort_by;
+        self.config.sort_direction = self.sort_dir;
+        self.config.ignore_dev_caches = self.ignore_dev_caches;
+        self.config.custom_excludes = self.custom_excludes.clone();
+        self.config.last_path = Some(self.current_path.clone());
+        let _ = self.config.save();
     }
 
     fn collect_excludes(&self) -> Vec<String> {
@@ -107,6 +131,7 @@ impl FreeDataDietApp {
     fn navigate_to(&mut self, path: PathBuf) {
         if path.is_dir() {
             self.current_path = path;
+            self.save_config();
             self.trigger_scan();
         }
     }
@@ -178,6 +203,7 @@ impl FreeDataDietApp {
             self.sort_dir = SortDirection::Descending;
         }
         self.sort_entries();
+        self.save_config();
     }
 }
 
@@ -314,9 +340,12 @@ impl eframe::App for FreeDataDietApp {
                             .desired_width(ui.available_width() - 90.0),
                     );
 
-                    if (self.ignore_dev_caches != prev_ignore || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-                        && ui.button("Apply").clicked()
+                    let apply_btn = ui.button("Apply").clicked();
+                    if self.ignore_dev_caches != prev_ignore
+                        || apply_btn
+                        || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
+                        self.save_config();
                         self.trigger_scan();
                     }
                 });
@@ -458,6 +487,19 @@ impl eframe::App for FreeDataDietApp {
                             let _ = platform::open_file(&entry.path);
                         }
 
+                        if ui.button("Copy Path").clicked() {
+                            ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
+                        }
+
+                        #[cfg(windows)]
+                        if ui
+                            .button("Properties (Windows)")
+                            .on_hover_text("Opens the native Windows properties dialog")
+                            .clicked()
+                        {
+                            let _ = platform::show_properties(&entry.path);
+                        }
+
                         ui.add_space(8.0);
 
                         let trash_btn = ui.button(
@@ -495,52 +537,145 @@ impl eframe::App for FreeDataDietApp {
 
         // --- CENTRAL DATA TABLE PANEL ---
         egui::CentralPanel::default().show(ui, |ui| {
-            // Sort Header Row
+            let total_width = ui.available_width();
+            let col_spacing = 6.0;
+
+            let fixed_sum: f32 = self
+                .config
+                .column_order
+                .iter()
+                .filter(|&&c| c != ColumnId::Name)
+                .map(|c| c.fixed_width())
+                .sum();
+            let spacing_sum = (self.config.column_order.len().saturating_sub(1) as f32) * col_spacing;
+            let name_width = (total_width - fixed_sum - spacing_sum).max(160.0);
+
+            let mut swap_columns = None;
+            let mut sort_column = None;
+
+            // Interactive Drag-and-Drop & Sortable Header Row
             ui.horizontal(|ui| {
-                let name_arrow = if self.sort_by == SortBy::Name {
-                    if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
-                } else { "" };
-                if ui.button(format!("Name{}", name_arrow)).clicked() {
-                    self.toggle_sort(SortBy::Name);
-                }
+                ui.spacing_mut().item_spacing.x = col_spacing;
 
-                ui.separator();
+                for (idx, &col) in self.config.column_order.iter().enumerate() {
+                    let w = if col == ColumnId::Name { name_width } else { col.fixed_width() };
+                    let is_dragging = self.dragged_column_idx == Some(idx);
+                    let is_active_sort = col.sort_by() == Some(self.sort_by);
 
-                let size_arrow = if self.sort_by == SortBy::Size {
-                    if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
-                } else { "" };
-                if ui.button(format!("Size{}", size_arrow)).clicked() {
-                    self.toggle_sort(SortBy::Size);
-                }
+                    let arrow = if is_active_sort {
+                        if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
+                    } else {
+                        ""
+                    };
+                    let label_text = format!("{}{}", col.title(), arrow);
 
-                ui.separator();
+                    let (header_rect, header_resp) = ui.allocate_exact_size(
+                        Vec2::new(w, 24.0),
+                        egui::Sense::click_and_drag(),
+                    );
 
-                let disk_arrow = if self.sort_by == SortBy::AllocatedSize {
-                    if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
-                } else { "" };
-                if ui.button(format!("On Disk{}", disk_arrow)).clicked() {
-                    self.toggle_sort(SortBy::AllocatedSize);
-                }
+                    let header_resp = header_resp
+                        .on_hover_cursor(if is_dragging {
+                            egui::CursorIcon::Grabbing
+                        } else {
+                            egui::CursorIcon::Grab
+                        })
+                        .on_hover_text("Click to sort, drag left/right to reorder columns");
 
-                ui.separator();
+                    if header_resp.clicked() {
+                        if let Some(target) = col.sort_by() {
+                            sort_column = Some(target);
+                        }
+                    }
 
-                let items_arrow = if self.sort_by == SortBy::ItemCount {
-                    if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
-                } else { "" };
-                if ui.button(format!("Items{}", items_arrow)).clicked() {
-                    self.toggle_sort(SortBy::ItemCount);
-                }
+                    if header_resp.drag_started() {
+                        self.dragged_column_idx = Some(idx);
+                    }
 
-                ui.separator();
+                    if is_dragging && header_resp.dragged() {
+                        if let Some(mouse_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            if mouse_pos.x < header_rect.min.x - 8.0 && idx > 0 {
+                                swap_columns = Some((idx, idx - 1));
+                            } else if mouse_pos.x > header_rect.max.x + 8.0 && idx + 1 < self.config.column_order.len() {
+                                swap_columns = Some((idx, idx + 1));
+                            }
+                        }
+                    }
 
-                let mod_arrow = if self.sort_by == SortBy::Modified {
-                    if self.sort_dir == SortDirection::Ascending { " ^" } else { " v" }
-                } else { "" };
-                if ui.button(format!("Date{}", mod_arrow)).clicked() {
-                    self.toggle_sort(SortBy::Modified);
+                    if header_resp.drag_stopped() {
+                        self.dragged_column_idx = None;
+                        let _ = self.config.save();
+                    }
+
+                    // Background color
+                    let bg_color = if is_dragging {
+                        Color32::from_rgb(45, 80, 125)
+                    } else if header_resp.hovered() {
+                        Color32::from_rgb(38, 48, 62)
+                    } else {
+                        Color32::from_rgb(26, 33, 44)
+                    };
+
+                    let stroke_color = if is_dragging {
+                        Color32::from_rgb(100, 180, 255)
+                    } else if is_active_sort {
+                        Color32::from_rgb(60, 120, 180)
+                    } else {
+                        Color32::from_rgb(48, 58, 72)
+                    };
+
+                    ui.painter().rect(
+                        header_rect,
+                        3.0,
+                        bg_color,
+                        egui::Stroke::new(1.0, stroke_color),
+                        egui::StrokeKind::Inside,
+                    );
+
+                    let text_color = if is_active_sort || is_dragging {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(200, 210, 220)
+                    };
+
+                    let is_right_aligned = matches!(
+                        col,
+                        ColumnId::Size | ColumnId::AllocatedSize | ColumnId::Items | ColumnId::Modified
+                    );
+
+                    let (align, text_pos) = if is_right_aligned {
+                        (
+                            egui::Align2::RIGHT_CENTER,
+                            egui::pos2(header_rect.max.x - 8.0, header_rect.center().y),
+                        )
+                    } else {
+                        (
+                            egui::Align2::LEFT_CENTER,
+                            egui::pos2(header_rect.min.x + 8.0, header_rect.center().y),
+                        )
+                    };
+
+                    ui.painter().text(
+                        text_pos,
+                        align,
+                        &label_text,
+                        egui::FontId::proportional(12.5),
+                        text_color,
+                    );
                 }
             });
 
+            if let Some((from, to)) = swap_columns {
+                self.config.column_order.swap(from, to);
+                self.dragged_column_idx = Some(to);
+                let _ = self.config.save();
+            }
+
+            if let Some(target) = sort_column {
+                self.toggle_sort(target);
+            }
+
+            ui.add_space(2.0);
             ui.separator();
 
             let max_size = self
@@ -552,6 +687,7 @@ impl eframe::App for FreeDataDietApp {
 
             let mut navigate_target = None;
             let mut scroll_to_selected = false;
+            let mut context_delete = None;
 
             // Keyboard navigation (active when not typing in text input)
             if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None {
@@ -625,8 +761,6 @@ impl eframe::App for FreeDataDietApp {
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let total_width = ui.available_width();
-
                     for (i, entry) in self.entries.iter().enumerate() {
                         let is_selected = self.selected_index == Some(i);
                         let (badge, badge_color) = get_type_badge(entry);
@@ -635,60 +769,120 @@ impl eframe::App for FreeDataDietApp {
                         let bg_idx = ui.painter().add(egui::Shape::Noop);
 
                         let row_resp = ui.horizontal(|ui| {
-                            // Type Badge
-                            ui.add_sized(
-                                [46.0, 20.0],
-                                egui::Label::new(
-                                    RichText::new(&badge).monospace().color(badge_color).strong(),
-                                ),
-                            );
+                            ui.spacing_mut().item_spacing.x = col_spacing;
 
-                            // Name Label (highlighted if selected)
-                            ui.add_sized(
-                                [270.0, 20.0],
-                                egui::Label::new(
-                                    RichText::new(&entry.name)
-                                        .color(if is_selected {
-                                            Color32::from_rgb(120, 215, 255)
-                                        } else {
-                                            Color32::WHITE
-                                        })
-                                        .strong(),
-                                ),
-                            );
+                            for &col in &self.config.column_order {
+                                let w = if col == ColumnId::Name { name_width } else { col.fixed_width() };
 
-                            // Apparent Size
-                            ui.add_sized(
-                                [90.0, 20.0],
-                                egui::Label::new(
-                                    RichText::new(format_size(entry.size)).monospace(),
-                                ),
-                            );
+                                match col {
+                                    ColumnId::Name => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                // Type Badge
+                                                ui.add_sized(
+                                                    [44.0, 20.0],
+                                                    egui::Label::new(
+                                                        RichText::new(&badge).monospace().color(badge_color).strong(),
+                                                    ),
+                                                );
 
-                            // Allocated Size on Disk
-                            ui.add_sized(
-                                [90.0, 20.0],
-                                egui::Label::new(
-                                    RichText::new(format_size(entry.allocated_size))
-                                        .monospace()
-                                        .color(Color32::GRAY),
-                                ),
-                            );
-
-                            // Progress Bar relative to largest item
-                            let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
-                            let bar = ProgressBar::new(ratio)
-                                .text(format!("{:.1}%", ratio * 100.0))
-                                .desired_width(120.0);
-                            ui.add(bar);
-
-                            // Items count
-                            if entry.is_dir {
-                                ui.label(
-                                    RichText::new(format!("{} items", entry.item_count))
-                                        .small()
-                                        .color(Color32::DARK_GRAY),
-                                );
+                                                // Name Label (highlighted if selected)
+                                                let name_color = if is_selected {
+                                                    Color32::from_rgb(120, 215, 255)
+                                                } else {
+                                                    Color32::WHITE
+                                                };
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(&entry.name).color(name_color).strong(),
+                                                    ).truncate(),
+                                                );
+                                            },
+                                        );
+                                    }
+                                    ColumnId::Size => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.add_space(8.0);
+                                                ui.label(
+                                                    RichText::new(format_size(entry.size)).monospace(),
+                                                );
+                                            },
+                                        );
+                                    }
+                                    ColumnId::AllocatedSize => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.add_space(8.0);
+                                                ui.label(
+                                                    RichText::new(format_size(entry.allocated_size))
+                                                        .monospace()
+                                                        .color(Color32::GRAY),
+                                                );
+                                            },
+                                        );
+                                    }
+                                    ColumnId::Usage => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
+                                                let bar = ProgressBar::new(ratio)
+                                                    .text(format!("{:.1}%", ratio * 100.0))
+                                                    .desired_width(w - 10.0);
+                                                ui.add(bar);
+                                            },
+                                        );
+                                    }
+                                    ColumnId::Items => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.add_space(8.0);
+                                                if entry.is_dir {
+                                                    ui.label(
+                                                        RichText::new(format!("{}", entry.item_count))
+                                                            .monospace()
+                                                            .color(Color32::DARK_GRAY),
+                                                    );
+                                                } else {
+                                                    ui.label(
+                                                        RichText::new("-")
+                                                            .monospace()
+                                                            .color(Color32::DARK_GRAY),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    }
+                                    ColumnId::Modified => {
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(w, 20.0),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.add_space(8.0);
+                                                let mod_str = entry
+                                                    .modified
+                                                    .map(crate::model::format_system_time)
+                                                    .unwrap_or_else(|| "-".to_string());
+                                                ui.label(
+                                                    RichText::new(mod_str)
+                                                        .monospace()
+                                                        .small()
+                                                        .color(Color32::GRAY),
+                                                );
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }).response;
 
@@ -702,6 +896,68 @@ impl eframe::App for FreeDataDietApp {
                             ui.scope_id().with(i),
                             egui::Sense::click(),
                         );
+
+                        // Right-Click Context Menu
+                        row_click.context_menu(|ui| {
+                            ui.set_min_width(210.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&badge).monospace().color(badge_color).strong());
+                                ui.label(RichText::new(&entry.name).strong());
+                            });
+                            ui.separator();
+
+                            if entry.is_dir {
+                                if ui.button("Open Folder in FreeDataDiet").clicked() {
+                                    navigate_target = Some(entry.path.clone());
+                                    ui.close();
+                                }
+                            } else if ui.button("Open / Launch File").clicked() {
+                                let _ = platform::open_file(&entry.path);
+                                ui.close();
+                            }
+
+                            if ui.button("Show in Windows Explorer").clicked() {
+                                let _ = platform::open_in_file_manager(&entry.path);
+                                ui.close();
+                            }
+
+                            if ui.button("Copy Full Path").clicked() {
+                                ui.ctx().copy_text(entry.path.to_string_lossy().to_string());
+                                ui.close();
+                            }
+
+                            #[cfg(windows)]
+                            if ui.button("Windows Properties...").clicked() {
+                                let _ = platform::show_properties(&entry.path);
+                                ui.close();
+                            }
+
+                            ui.separator();
+
+                            if ui.button(
+                                RichText::new("Move to Recycle Bin")
+                                    .color(Color32::from_rgb(255, 200, 100)),
+                            ).clicked() {
+                                context_delete = Some(DeleteConfirmState::ConfirmTrash(
+                                    entry.path.clone(),
+                                    entry.name.clone(),
+                                    entry.is_system_protected,
+                                ));
+                                ui.close();
+                            }
+
+                            if ui.button(
+                                RichText::new("Delete Permanently")
+                                    .color(Color32::from_rgb(255, 100, 100)),
+                            ).clicked() {
+                                context_delete = Some(DeleteConfirmState::ConfirmPermanent(
+                                    entry.path.clone(),
+                                    entry.name.clone(),
+                                    entry.is_system_protected,
+                                ));
+                                ui.close();
+                            }
+                        });
 
                         // Paint full-row selection or hover background behind text
                         if is_selected {
@@ -726,11 +982,15 @@ impl eframe::App for FreeDataDietApp {
                             );
                         }
 
-                        if row_click.clicked() {
+                        if row_click.clicked() || row_click.secondary_clicked() {
                             self.selected_index = Some(i);
                         }
-                        if row_click.double_clicked() && entry.is_dir {
-                            navigate_target = Some(entry.path.clone());
+                        if row_click.double_clicked() {
+                            if entry.is_dir {
+                                navigate_target = Some(entry.path.clone());
+                            } else {
+                                let _ = platform::open_file(&entry.path);
+                            }
                         }
 
                         if is_selected && scroll_to_selected {
@@ -738,6 +998,10 @@ impl eframe::App for FreeDataDietApp {
                         }
                     }
                 });
+
+            if let Some(modal) = context_delete {
+                self.delete_modal = modal;
+            }
 
             if let Some(target) = navigate_target {
                 self.navigate_to(target);

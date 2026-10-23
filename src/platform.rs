@@ -23,6 +23,26 @@ mod win {
     #[link(name = "shell32")]
     unsafe extern "system" {
         fn IsUserAnAdmin() -> i32;
+        fn ShellExecuteExW(pExecInfo: *mut SHELLEXECUTEINFOW) -> i32;
+    }
+
+    #[repr(C)]
+    struct SHELLEXECUTEINFOW {
+        cb_size: u32,
+        f_mask: u32,
+        hwnd: isize,
+        lp_verb: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show: i32,
+        h_inst_app: isize,
+        lp_id_list: *mut std::ffi::c_void,
+        lp_class: *const u16,
+        hkey_class: isize,
+        dw_hot_key: u32,
+        h_icon_or_monitor: isize,
+        h_process: isize,
     }
 
     fn to_wide(s: &str) -> Vec<u16> {
@@ -31,6 +51,36 @@ mod win {
 
     pub fn is_admin() -> bool {
         unsafe { IsUserAnAdmin() != 0 }
+    }
+
+    pub fn show_properties(path: &Path) -> Result<(), String> {
+        let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let verb = to_wide("properties");
+
+        let mut sei = SHELLEXECUTEINFOW {
+            cb_size: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            f_mask: 0x0000_000C, // SEE_MASK_INVOKEIDLIST
+            hwnd: 0,
+            lp_verb: verb.as_ptr(),
+            lp_file: wide_path.as_ptr(),
+            lp_parameters: std::ptr::null(),
+            lp_directory: std::ptr::null(),
+            n_show: 5, // SW_SHOW
+            h_inst_app: 0,
+            lp_id_list: std::ptr::null_mut(),
+            lp_class: std::ptr::null(),
+            hkey_class: 0,
+            dw_hot_key: 0,
+            h_icon_or_monitor: 0,
+            h_process: 0,
+        };
+
+        let ret = unsafe { ShellExecuteExW(&mut sei) };
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err("Failed to open Windows properties".to_string())
+        }
     }
 
     pub fn get_drives() -> Vec<DriveInfo> {
@@ -179,6 +229,10 @@ mod unix {
         }
         cmd.spawn().map_err(|e| e.to_string())?;
         std::process::exit(0);
+    }
+
+    pub fn show_properties(path: &Path) -> Result<(), String> {
+        crate::platform::open_in_file_manager(path).map_err(|e| e.to_string())
     }
 }
 

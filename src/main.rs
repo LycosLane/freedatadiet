@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod config;
 mod model;
 mod platform;
 mod scanner;

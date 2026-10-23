@@ -1,6 +1,6 @@
 [package]
 name = "freedatadiet"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["LycosLane <lycos.lane@gmail.com>"]
 description = "FreeDataDiet - Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer."
@@ -10,4 +10,6 @@ repository = "https://github.com/LycosLane/FreeDataDiet"
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }
 rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 trash = "5.2.9"

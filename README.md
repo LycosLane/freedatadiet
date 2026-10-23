@@ -46,13 +46,27 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 
 | Key / Action | Function |
 | :--- | :--- |
-| **Double Click** | Enter folder |
-| **`⬆ Nach oben`** | Navigate to parent directory |
-| **`⚙️ Filter`** | Toggle developer cache excludes (`.git`, `node_modules`, etc.) |
-| **Sort Headers** | Sort by Name, Apparent Size, Size on Disk, Item Count, or Date |
-| **`🛡️ Als Admin`** | Restart with elevated Administrator privileges on demand |
-| **`🗑️ Papierkorb`** | Move item to OS Recycle Bin (safe) |
-| **`⚠️ Endgültig`** | Permanently delete item (with confirmation) |
+| **Up / Down / j / k** | Navigate selection through folder rows |
+| **Enter / Right** | Open selected directory (or launch file) |
+| **Backspace / Left** | Navigate up to parent directory |
+| **Delete** | Move selected item to Recycle Bin / Trash |
+| **Shift + Delete** | Permanently delete selected item (with confirmation) |
+| **F5** | Rescan / refresh current directory |
+| **Double Click** | Enter directory or open file |
+| **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
+| **Header Drag & Drop** | Reorder table columns interactively (saved to `config.json`) |
+| **Header Click** | Sort by column (Name, Size, On Disk, Usage, Items, Date) |
+| **`Restart as Admin`** | Elevate to Administrator permissions seamlessly |
+
+---
+
+## Configuration (`config.json`)
+
+FreeDataDiet stores settings in a clean, human-readable `config.json` next to the executable:
+* Column order & visibility
+* Last visited path
+* Sort column & direction
+* Dev cache exclusion list & enabled state
 
 ---
 

@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortBy {
     Size,
     AllocatedSize,
@@ -10,7 +11,7 @@ pub enum SortBy {
     ItemCount,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortDirection {
     Ascending,
     Descending,
@@ -120,4 +121,49 @@ pub fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+pub fn format_system_time(time: SystemTime) -> String {
+    let dur = match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d,
+        Err(_) => return "-".to_string(),
+    };
+    format_epoch_secs(dur.as_secs())
+}
+
+pub fn format_epoch_secs(secs: u64) -> String {
+    let min = ((secs / 60) % 60) as u32;
+    let hour = ((secs / 3600) % 24) as u32;
+    let mut days = (secs / 86400) as i64;
+
+    let mut year = 1970;
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if days >= days_in_year {
+            days -= days_in_year;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_days = [
+        31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31,
+    ];
+
+    let mut month = 1;
+    for &m_days in &month_days {
+        if days >= m_days {
+            days -= m_days;
+            month += 1;
+        } else {
+            break;
+        }
+    }
+    let day = days + 1;
+
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hour, min)
 }
