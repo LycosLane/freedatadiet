@@ -53,6 +53,45 @@ mod win {
         unsafe { IsUserAnAdmin() != 0 }
     }
 
+    pub fn is_system_dark_mode() -> bool {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn RegGetValueW(
+                hkey: isize,
+                lpSubKey: *const u16,
+                lpValue: *const u16,
+                dwFlags: u32,
+                pdwType: *mut u32,
+                pvData: *mut std::ffi::c_void,
+                pcbData: *mut u32,
+            ) -> i32;
+        }
+
+        let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+        let val_name = to_wide("AppsUseLightTheme");
+        let mut data: u32 = 0;
+        let mut data_len = std::mem::size_of::<u32>() as u32;
+        let mut val_type: u32 = 0;
+
+        let res = unsafe {
+            RegGetValueW(
+                0x8000_0001_u32 as i32 as isize, // HKEY_CURRENT_USER
+                subkey.as_ptr(),
+                val_name.as_ptr(),
+                0x00000010, // RRF_RT_REG_DWORD
+                &mut val_type,
+                &mut data as *mut u32 as *mut std::ffi::c_void,
+                &mut data_len,
+            )
+        };
+
+        if res == 0 {
+            data == 0
+        } else {
+            true
+        }
+    }
+
     pub fn show_properties(path: &Path) -> Result<(), String> {
         let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
         let verb = to_wide("properties");
@@ -154,6 +193,10 @@ mod unix {
 
     pub fn is_admin() -> bool {
         unsafe { libc::geteuid() == 0 }
+    }
+
+    pub fn is_system_dark_mode() -> bool {
+        true
     }
 
     pub fn get_drives() -> Vec<DriveInfo> {

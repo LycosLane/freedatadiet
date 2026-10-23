@@ -57,12 +57,14 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 | **Enter** | Enter selected directory or launch file |
 | **Backspace / Left** | Navigate up to parent directory |
 | **Typing Letters (Quick Search)** | Jump to item by name (Explorer style) or live filter visible rows (FilePilot style, configurable in Settings) |
-| **Esc** | Clear quick search filter |
+| **Esc** | Clear quick search filter or dismiss popups |
 | **Delete** | Move selected item to Recycle Bin / Trash (with keyboard-navigable confirmation modal) |
 | **Shift + Delete** | Permanently delete selected item (with confirmation) |
 | **Context Menu / Shift+F10** | Open context menu for selected item using the keyboard |
 | **Ctrl + H** | Toggle hidden files and folders |
 | **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
+| **Ctrl + ,  /  Alt + S** | Open Settings & Preferences dialog |
+| **F1  /  ?** | Toggle Keyboard Shortcuts cheat sheet (closes on any key press) |
 | **F5** | Rescan / refresh current directory |
 | **Double Click** | Enter directory or open file |
 | **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
@@ -76,6 +78,13 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 
 * **Immediate Discovery:** Shows all direct child folders immediately upon scan start, marking calculating folders with `[calculating]` / `Scanning...` so large folders like `Users` or `Windows` are never hidden while counting.
 * **Dedicated Type Column:** Clean `Type` column with aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keeping file and directory names strictly aligned.
+* **Dark & Light Modes:** Built-in Dark Mode, Light Mode, and automatic OS System theme detection with crisp contrast for badges, rows, and headers.
+* **Proportional & Relative Usage Bars (%):** Choose between 4 distinct visual scaling modes:
+  - *Largest Item in View (100% = biggest file/folder)*: The heaviest entry occupies the full 100% bar, and other items scale in proportion.
+  - *Current Folder Total (100% = sum of folder)*: Shows each item's share of the directory's total weight.
+  - *Drive Used Space (100% = all used storage)*: Shows share relative to total occupied disk space.
+  - *Drive Total Capacity (100% = full disk size)*: Shows share relative to the partition's entire capacity.
+* **Instant Keyboard Shortcuts Sheet (F1):** Press `F1` or `?` anytime for an instant shortcut cheat sheet modal that dismisses automatically on any key press.
 * **Quick Search Modes:** Choose between Windows Explorer-style *Jump-to-prefix* (cycles on repeated keys) or FilePilot-style *Live filtering* with instant feedback banner.
 * **Geometric Sort Arrows:** Crisp vector triangles drawn directly to guarantee identical baseline, dimensions, and zero unicode font fallback glitches.
 * **Hidden & System File Toggles:** Easily filter or reveal hidden and system-protected operating system items (such as `hiberfil.sys`, `pagefile.sys`, and NTFS junctions like `Documents and Settings`).
@@ -88,6 +97,8 @@ Traditional disk analyzers like *TreeSize Free* wrap basic filesystem inspection
 ## Configuration (`config.json`)
 
 FreeDataDiet stores settings in a clean, human-readable `config.json` next to the executable:
+* Theme (`"Dark"`, `"Light"`, `"System"`)
+* Usage bar percentage basis (`"LargestItem"`, `"Folder"`, `"DriveUsed"`, `"DriveTotal"`)
 * Column order & visibility (including `Type`, `Name`, `Size`, `AllocatedSize`, `Usage`, `Items`, `Modified`)
 * Multi-column sort rules
 * Show hidden / system files toggles

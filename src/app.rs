@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
 
-use crate::config::{AppConfig, ColumnId, QuickSearchMode, SortRule, UsageBasis};
+use crate::config::{AppConfig, AppTheme, ColumnId, QuickSearchMode, SortRule, UsageBasis};
 use crate::model::{format_size, DriveInfo, FileEntry, SortDirection};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
@@ -124,6 +124,8 @@ pub struct FreeDataDietApp {
     delete_modal: DeleteConfirmState,
     modal_focus: DeleteModalFocus,
     active_context_menu: Option<ActiveContextMenu>,
+    show_settings_modal: bool,
+    show_shortcuts_modal: bool,
     is_admin: bool,
 }
 
@@ -173,6 +175,8 @@ impl FreeDataDietApp {
             delete_modal: DeleteConfirmState::None,
             modal_focus: DeleteModalFocus::Trash,
             active_context_menu: None,
+            show_settings_modal: false,
+            show_shortcuts_modal: false,
             is_admin,
         };
 
@@ -448,42 +452,87 @@ fn get_type_sort_key(e: &FileEntry) -> (u8, String) {
     }
 }
 
-fn get_type_badge(entry: &FileEntry) -> (String, Color32) {
+fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32) {
     if entry.is_reparse_point {
-        ("[JUNC]".to_string(), Color32::from_rgb(200, 160, 255))
+        (
+            "[JUNC]".to_string(),
+            if is_dark { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(130, 70, 200) },
+        )
     } else if entry.is_system_protected {
-        ("[SYS]".to_string(), Color32::from_rgb(255, 175, 40))
+        (
+            "[SYS]".to_string(),
+            if is_dark { Color32::from_rgb(255, 175, 40) } else { Color32::from_rgb(200, 110, 0) },
+        )
     } else if entry.is_access_denied {
-        ("[LOCK]".to_string(), Color32::from_rgb(255, 90, 90))
+        (
+            "[LOCK]".to_string(),
+            if is_dark { Color32::from_rgb(255, 90, 90) } else { Color32::from_rgb(200, 30, 30) },
+        )
     } else if entry.is_dir {
-        ("[DIR]".to_string(), Color32::from_rgb(80, 200, 255))
+        (
+            "[DIR]".to_string(),
+            if is_dark { Color32::from_rgb(80, 200, 255) } else { Color32::from_rgb(0, 120, 210) },
+        )
     } else if let Some(ext) = entry.path.extension().and_then(|e| e.to_str()) {
         let ext_upper = ext.to_uppercase();
         if ext_upper.len() <= 4 {
-            (format!("[{}]", ext_upper), Color32::from_rgb(160, 185, 205))
+            (
+                format!("[{}]", ext_upper),
+                if is_dark { Color32::from_rgb(160, 185, 205) } else { Color32::from_rgb(60, 90, 120) },
+            )
         } else {
-            ("[FILE]".to_string(), Color32::from_rgb(150, 160, 175))
+            (
+                "[FILE]".to_string(),
+                if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
+            )
         }
     } else {
-        ("[FILE]".to_string(), Color32::from_rgb(150, 160, 175))
+        (
+            "[FILE]".to_string(),
+            if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
+        )
     }
 }
 
 impl eframe::App for FreeDataDietApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let is_dark = match self.config.theme {
+            AppTheme::Dark => true,
+            AppTheme::Light => false,
+            AppTheme::System => platform::is_system_dark_mode(),
+        };
+        if is_dark {
+            ui.ctx().set_visuals(egui::Visuals::dark());
+        } else {
+            ui.ctx().set_visuals(egui::Visuals::light());
+        }
+
         self.poll_scanner();
 
         if self.is_scanning {
             ui.ctx().request_repaint();
         }
 
-        // Global Shortcuts for Hidden & System Files
-        if !ui.ctx().egui_wants_keyboard_input() && self.delete_modal == DeleteConfirmState::None && self.active_context_menu.is_none() {
+        // Global Shortcuts for Hidden & System Files, Settings, Shortcuts Help
+        if !ui.ctx().egui_wants_keyboard_input()
+            && self.delete_modal == DeleteConfirmState::None
+            && self.active_context_menu.is_none()
+            && !self.show_shortcuts_modal
+            && !self.show_settings_modal
+        {
             let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
             let shift = ui.input(|i| i.modifiers.shift);
+            let alt = ui.input(|i| i.modifiers.alt);
             let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
+            let comma_pressed = ui.input(|i| i.key_pressed(egui::Key::Comma));
+            let s_pressed = ui.input(|i| i.key_pressed(egui::Key::S));
+            let f1_pressed = ui.input(|i| i.key_pressed(egui::Key::F1) || (shift && i.key_pressed(egui::Key::Slash)));
 
-            if ctrl && shift && h_pressed {
+            if f1_pressed {
+                self.show_shortcuts_modal = !self.show_shortcuts_modal;
+            } else if (ctrl && comma_pressed) || (alt && s_pressed) {
+                self.show_settings_modal = !self.show_settings_modal;
+            } else if ctrl && shift && h_pressed {
                 self.config.show_system_files = !self.config.show_system_files;
                 self.save_config();
                 self.sort_entries();
@@ -514,9 +563,9 @@ impl eframe::App for FreeDataDietApp {
 
                     let btn = egui::Button::new(
                         RichText::new(label).color(if is_current {
-                            Color32::from_rgb(100, 200, 255)
+                            if is_dark { Color32::from_rgb(100, 200, 255) } else { Color32::from_rgb(0, 110, 220) }
                         } else {
-                            Color32::LIGHT_GRAY
+                            if is_dark { Color32::LIGHT_GRAY } else { Color32::DARK_GRAY }
                         }),
                     );
 
@@ -557,89 +606,11 @@ impl eframe::App for FreeDataDietApp {
                 let mut do_refresh = false;
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("Settings", |ui| {
-                        ui.set_min_width(250.0);
-                        ui.add_space(2.0);
-                        ui.label(RichText::new(format!("Usage Percentage Basis ({})", self.config.usage_basis.label())).strong());
-                        if ui.selectable_label(self.config.usage_basis == UsageBasis::Folder, "Current Folder").clicked() {
-                            self.config.usage_basis = UsageBasis::Folder;
-                            self.save_config();
-                            ui.close();
-                        }
-                        if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveUsed, "Drive (Used Space)").clicked() {
-                            self.config.usage_basis = UsageBasis::DriveUsed;
-                            self.save_config();
-                            ui.close();
-                        }
-                        if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveTotal, "Drive (Total Capacity)").clicked() {
-                            self.config.usage_basis = UsageBasis::DriveTotal;
-                            self.save_config();
-                            ui.close();
-                        }
+                    if ui.button("Settings (Ctrl+,)").clicked() {
+                        self.show_settings_modal = true;
+                    }
 
-                        ui.separator();
-                        ui.label(RichText::new("File Filters").strong());
-                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)").on_hover_text("Show hidden files and dotfiles (Toggle with Ctrl+H)").changed() {
-                            self.save_config();
-                        }
-                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions (Ctrl+Shift+H)").on_hover_text("Show protected system files and NTFS junctions (Toggle with Ctrl+Shift+H)").changed() {
-                            self.save_config();
-                        }
-
-                        ui.separator();
-                        ui.label(RichText::new("Quick Search Mode").strong());
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to item (Explorer style)").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::JumpToPrefix;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
-                        }
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
-                        }
-                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::Disabled, "Disabled").clicked() {
-                            self.config.quick_search_mode = QuickSearchMode::Disabled;
-                            self.quick_search_buffer.clear();
-                            self.save_config();
-                        }
-
-                        ui.separator();
-                        ui.label(RichText::new("Application Preferences").strong());
-                        if ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup").changed() {
-                            if !self.config.remember_last_path {
-                                self.config.last_path = None;
-                            }
-                            self.save_config();
-                        }
-
-                        ui.separator();
-                        ui.label(RichText::new("Developer Cache Filter").strong());
-                        if ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches").changed() {
-                            self.config.ignore_dev_caches = self.ignore_dev_caches;
-                            self.save_config();
-                            self.trigger_scan();
-                        }
-                        ui.label(RichText::new("Custom Excludes:").small().color(Color32::GRAY));
-                        let edit = ui.add(
-                            egui::TextEdit::singleline(&mut self.custom_excludes)
-                                .hint_text(".git, node_modules, target, .cache")
-                        );
-                        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            self.config.custom_excludes = self.custom_excludes.clone();
-                            self.save_config();
-                            self.trigger_scan();
-                        }
-                        if ui.button("Apply Filter Changes").clicked() {
-                            self.config.custom_excludes = self.custom_excludes.clone();
-                            self.save_config();
-                            self.trigger_scan();
-                            ui.close();
-                        }
-                        ui.add_space(2.0);
-                    });
-
-                    if ui.button("Refresh").clicked() {
+                    if ui.button("Refresh (F5)").clicked() {
                         do_refresh = true;
                     }
 
@@ -713,9 +684,9 @@ impl eframe::App for FreeDataDietApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new("[Up/Down] Navigate  |  [Enter/Right] Open  |  [Backspace/Left] Up  |  [Del] Trash  |  [Ctrl+H] Hidden")
+                        RichText::new("[Up/Down] Navigate  |  [Enter/Right] Open  |  [Backspace/Left] Up  |  [Del] Trash  |  [Ctrl+H] Hidden  |  [F1] Shortcuts")
                             .small()
-                            .color(Color32::DARK_GRAY),
+                            .color(if is_dark { Color32::DARK_GRAY } else { Color32::from_rgb(120, 120, 120) }),
                     );
                 });
             });
@@ -736,7 +707,7 @@ impl eframe::App for FreeDataDietApp {
                 });
 
                 if let Some(entry) = selected_entry {
-                    let (badge, badge_color) = get_type_badge(entry);
+                    let (badge, badge_color) = get_type_badge(entry, is_dark);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(badge).monospace().color(badge_color).strong());
                         ui.label(RichText::new(&entry.name).strong());
@@ -912,11 +883,7 @@ impl eframe::App for FreeDataDietApp {
                     };
 
                     let col_title = if col == ColumnId::Usage {
-                        match current_basis {
-                            UsageBasis::Folder => "Usage (Dir)",
-                            UsageBasis::DriveUsed => "Usage (Drive)",
-                            UsageBasis::DriveTotal => "Usage (Total)",
-                        }
+                        current_basis.title()
                     } else {
                         col.title()
                     };
@@ -937,19 +904,21 @@ impl eframe::App for FreeDataDietApp {
 
                     if col == ColumnId::Usage {
                         header_resp.context_menu(|ui| {
-                            ui.label(RichText::new("Usage Percentage Basis").strong());
+                            ui.label(RichText::new("Usage Bar Percentage Basis (%)").strong());
                             ui.separator();
-                            if ui.selectable_label(current_basis == UsageBasis::Folder, "Relative to Current Folder").clicked() {
-                                change_basis = Some(UsageBasis::Folder);
-                                ui.close();
-                            }
-                            if ui.selectable_label(current_basis == UsageBasis::DriveUsed, "Relative to Drive Used Space").clicked() {
-                                change_basis = Some(UsageBasis::DriveUsed);
-                                ui.close();
-                            }
-                            if ui.selectable_label(current_basis == UsageBasis::DriveTotal, "Relative to Drive Total Capacity").clicked() {
-                                change_basis = Some(UsageBasis::DriveTotal);
-                                ui.close();
+                            for basis in [
+                                UsageBasis::LargestItem,
+                                UsageBasis::Folder,
+                                UsageBasis::DriveUsed,
+                                UsageBasis::DriveTotal,
+                            ] {
+                                if ui.selectable_label(current_basis == basis, basis.display_name())
+                                    .on_hover_text(basis.description())
+                                    .clicked()
+                                {
+                                    change_basis = Some(basis);
+                                    ui.close();
+                                }
                             }
                         });
                     }
@@ -979,11 +948,11 @@ impl eframe::App for FreeDataDietApp {
 
                     // Background color
                     let bg_color = if is_dragging {
-                        Color32::from_rgb(45, 80, 125)
+                        if is_dark { Color32::from_rgb(45, 80, 125) } else { Color32::from_rgb(180, 210, 245) }
                     } else if header_resp.hovered() {
-                        Color32::from_rgb(38, 48, 62)
+                        if is_dark { Color32::from_rgb(38, 48, 62) } else { Color32::from_rgb(220, 228, 238) }
                     } else {
-                        Color32::from_rgb(26, 33, 44)
+                        if is_dark { Color32::from_rgb(26, 33, 44) } else { Color32::from_rgb(235, 240, 248) }
                     };
 
                     let stroke_color = if is_dragging {
@@ -991,7 +960,7 @@ impl eframe::App for FreeDataDietApp {
                     } else if is_active_sort {
                         Color32::from_rgb(60, 120, 180)
                     } else {
-                        Color32::from_rgb(48, 58, 72)
+                        if is_dark { Color32::from_rgb(48, 58, 72) } else { Color32::from_rgb(205, 215, 225) }
                     };
 
                     ui.painter().rect(
@@ -1003,9 +972,9 @@ impl eframe::App for FreeDataDietApp {
                     );
 
                     let text_color = if is_active_sort || is_dragging {
-                        Color32::WHITE
+                        if is_dark { Color32::WHITE } else { Color32::from_rgb(10, 50, 110) }
                     } else {
-                        Color32::from_rgb(200, 210, 220)
+                        if is_dark { Color32::from_rgb(200, 210, 220) } else { Color32::from_rgb(50, 60, 75) }
                     };
 
                     let is_right_aligned = matches!(
@@ -1024,7 +993,7 @@ impl eframe::App for FreeDataDietApp {
 
                     if let Some(pos) = sort_pos {
                         let dir = self.config.sort_rules[pos].direction;
-                        let arrow_color = Color32::from_rgb(100, 185, 255);
+                        let arrow_color = if is_dark { Color32::from_rgb(100, 185, 255) } else { Color32::from_rgb(0, 110, 220) };
 
                         let (text_pos, align, arrow_cx) = if is_right_aligned {
                             let right_pad = 8.0;
@@ -1097,6 +1066,14 @@ impl eframe::App for FreeDataDietApp {
             ui.separator();
 
             let base_size: f64 = match self.config.usage_basis {
+                UsageBasis::LargestItem => {
+                    let max_size = self.entries.iter().map(|e| e.size).max().unwrap_or(0);
+                    if max_size > 0 {
+                        max_size as f64
+                    } else {
+                        1.0
+                    }
+                }
                 UsageBasis::Folder => {
                     let sum: u64 = self.entries.iter().map(|e| e.size).sum();
                     if sum > 0 {
@@ -1165,6 +1142,8 @@ impl eframe::App for FreeDataDietApp {
             if !ui.ctx().egui_wants_keyboard_input()
                 && self.delete_modal == DeleteConfirmState::None
                 && self.active_context_menu.is_none()
+                && !self.show_shortcuts_modal
+                && !self.show_settings_modal
             {
                 let (typed_text, key_backspace, key_escape) = ui.input(|i| {
                     let mut text = String::new();
@@ -1402,7 +1381,7 @@ impl eframe::App for FreeDataDietApp {
                     }
                     for (_vis_idx, &(orig_idx, entry)) in visible_entries.iter().enumerate() {
                         let is_selected = self.selected_path.as_ref() == Some(&entry.path);
-                        let (badge, badge_color) = get_type_badge(entry);
+                        let (badge, badge_color) = get_type_badge(entry, is_dark);
 
                         // Reserve background shape slot before drawing row text
                         let bg_idx = ui.painter().add(egui::Shape::Noop);
@@ -1428,9 +1407,9 @@ impl eframe::App for FreeDataDietApp {
                                         let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell_rect));
                                         child_ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                             let name_color = if is_selected {
-                                                Color32::from_rgb(120, 215, 255)
+                                                if is_dark { Color32::from_rgb(120, 215, 255) } else { Color32::from_rgb(0, 90, 180) }
                                             } else {
-                                                Color32::WHITE
+                                                if is_dark { Color32::WHITE } else { Color32::from_rgb(20, 25, 35) }
                                             };
                                             ui.add_space(4.0);
                                             ui.add(
@@ -1455,7 +1434,7 @@ impl eframe::App for FreeDataDietApp {
                                                 egui::Align2::RIGHT_CENTER,
                                                 format_size(entry.size),
                                                 egui::FontId::monospace(12.5),
-                                                Color32::from_rgb(220, 220, 220),
+                                                if is_dark { Color32::from_rgb(220, 220, 220) } else { Color32::from_rgb(30, 35, 45) },
                                             );
                                         }
                                     }
@@ -1474,7 +1453,7 @@ impl eframe::App for FreeDataDietApp {
                                                 egui::Align2::RIGHT_CENTER,
                                                 format_size(entry.allocated_size),
                                                 egui::FontId::monospace(12.5),
-                                                Color32::GRAY,
+                                                if is_dark { Color32::GRAY } else { Color32::from_rgb(90, 95, 105) },
                                             );
                                         }
                                     }
@@ -1517,7 +1496,7 @@ impl eframe::App for FreeDataDietApp {
                                             egui::Align2::RIGHT_CENTER,
                                             txt,
                                             egui::FontId::monospace(12.0),
-                                            Color32::DARK_GRAY,
+                                            if is_dark { Color32::DARK_GRAY } else { Color32::from_rgb(120, 125, 135) },
                                         );
                                     }
                                     ColumnId::Modified => {
@@ -1530,7 +1509,7 @@ impl eframe::App for FreeDataDietApp {
                                             egui::Align2::RIGHT_CENTER,
                                             mod_str,
                                             egui::FontId::monospace(11.5),
-                                            Color32::GRAY,
+                                            if is_dark { Color32::GRAY } else { Color32::from_rgb(90, 95, 105) },
                                         );
                                     }
                                 }
@@ -1555,8 +1534,8 @@ impl eframe::App for FreeDataDietApp {
                                 egui::epaint::RectShape::new(
                                     full_row_rect,
                                     3.0,
-                                    Color32::from_rgb(32, 54, 82),
-                                    egui::Stroke::new(1.0, Color32::from_rgb(60, 140, 220)),
+                                    if is_dark { Color32::from_rgb(32, 54, 82) } else { Color32::from_rgb(205, 228, 252) },
+                                    egui::Stroke::new(1.0, if is_dark { Color32::from_rgb(60, 140, 220) } else { Color32::from_rgb(100, 160, 230) }),
                                     egui::StrokeKind::Inside,
                                 ),
                             );
@@ -1566,7 +1545,7 @@ impl eframe::App for FreeDataDietApp {
                                 egui::epaint::RectShape::filled(
                                     full_row_rect,
                                     3.0,
-                                    Color32::from_rgb(26, 32, 42),
+                                    if is_dark { Color32::from_rgb(26, 32, 42) } else { Color32::from_rgb(238, 243, 250) },
                                 ),
                             );
                         }
@@ -1656,7 +1635,7 @@ impl eframe::App for FreeDataDietApp {
             let resp = window.show(ui.ctx(), |ui| {
                 ui.set_min_width(210.0);
                 ui.add_space(3.0);
-                ui.label(RichText::new(&menu.name).strong().color(Color32::WHITE));
+                ui.label(RichText::new(&menu.name).strong().color(if is_dark { Color32::WHITE } else { Color32::from_rgb(20, 25, 35) }));
                 ui.separator();
 
                 for (idx, item) in items.iter().enumerate() {
@@ -1869,6 +1848,237 @@ impl eframe::App for FreeDataDietApp {
         }
         if trigger_rescan {
             self.trigger_scan();
+        }
+
+        // --- KEYBOARD SHORTCUTS POPUP ---
+        if self.show_shortcuts_modal {
+            let mut close_shortcuts = false;
+
+            // "goes away when you click any button" - any key press or Esc/Enter closes it
+            ui.input(|i| {
+                for event in &i.events {
+                    if matches!(event, egui::Event::Key { pressed: true, .. }) {
+                        close_shortcuts = true;
+                        break;
+                    }
+                }
+            });
+
+            egui::Window::new("Keyboard Shortcuts")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.set_min_width(520.0);
+                    ui.add_space(4.0);
+
+                    egui::Grid::new("shortcuts_grid")
+                        .num_columns(2)
+                        .spacing([18.0, 6.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            let add_sec = |ui: &mut egui::Ui, title: &str| {
+                                ui.label(RichText::new(title).strong().color(if is_dark { Color32::from_rgb(255, 200, 100) } else { Color32::from_rgb(180, 100, 0) }));
+                                ui.label("");
+                                ui.end_row();
+                            };
+                            let add_row = |ui: &mut egui::Ui, key: &str, desc: &str| {
+                                ui.label(RichText::new(key).strong().monospace().color(if is_dark { Color32::from_rgb(100, 190, 255) } else { Color32::from_rgb(0, 100, 200) }));
+                                ui.label(desc);
+                                ui.end_row();
+                            };
+
+                            add_sec(ui, "Navigation");
+                            add_row(ui, "Up / Down", "Navigate selection through folder rows");
+                            add_row(ui, "Home / End", "Jump to first / last item in current folder");
+                            add_row(ui, "PageUp / PageDown", "Scroll up / down by 15 items");
+                            add_row(ui, "Enter / Right Arrow", "Enter selected folder or launch file");
+                            add_row(ui, "Backspace / Left Arrow", "Navigate up to parent directory");
+
+                            add_sec(ui, "Quick Search");
+                            add_row(ui, "Typing Letters", "Jump to prefix (Explorer) or Live filter list (FilePilot)");
+                            add_row(ui, "Esc", "Clear active search filter query or dismiss popup");
+
+                            add_sec(ui, "File Operations");
+                            add_row(ui, "Del", "Move selected item to Recycle Bin / Trash");
+                            add_row(ui, "Shift + Del", "Permanently delete selected item (with confirmation)");
+                            add_row(ui, "Context Key / Shift+F10", "Open right-click context menu using keyboard");
+                            add_row(ui, "F5", "Refresh and rescan current directory");
+
+                            add_sec(ui, "Preferences & View");
+                            add_row(ui, "Ctrl + H", "Toggle hidden files and folders");
+                            add_row(ui, "Ctrl + Shift + H", "Toggle protected system files & NTFS junctions");
+                            add_row(ui, "Ctrl + ,  /  Alt + S", "Open Settings & Preferences dialog");
+                            add_row(ui, "F1  /  ?", "Toggle this Keyboard Shortcuts cheat sheet");
+                        });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Press any key or click Close to return").weak().small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close (Esc)").clicked() {
+                                close_shortcuts = true;
+                            }
+                        });
+                    });
+                });
+
+            if close_shortcuts {
+                self.show_shortcuts_modal = false;
+            }
+        }
+
+        // --- SETTINGS MODAL ---
+        if self.show_settings_modal {
+            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let mut trigger_rescan = false;
+
+            egui::Window::new("Settings & Preferences")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.set_min_width(520.0);
+                    ui.add_space(4.0);
+
+                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                        // 1. Theme
+                        ui.label(RichText::new("Theme & Appearance").size(14.0).strong());
+                        ui.horizontal(|ui| {
+                            for theme in [AppTheme::Dark, AppTheme::Light, AppTheme::System] {
+                                if ui.selectable_label(self.config.theme == theme, theme.label()).clicked() {
+                                    self.config.theme = theme;
+                                    self.save_config();
+                                }
+                            }
+                        });
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 2. Usage Percentage Basis (%)
+                        ui.label(RichText::new("Usage Bar Percentage Basis (%)").size(14.0).strong());
+                        ui.label(RichText::new("Choose what 100% represents on the visual usage bars:").weak().small());
+                        ui.add_space(2.0);
+
+                        for basis in [
+                            UsageBasis::LargestItem,
+                            UsageBasis::Folder,
+                            UsageBasis::DriveUsed,
+                            UsageBasis::DriveTotal,
+                        ] {
+                            let is_chosen = self.config.usage_basis == basis;
+                            if ui.selectable_label(is_chosen, RichText::new(basis.display_name()).strong()).clicked() {
+                                self.config.usage_basis = basis;
+                                self.save_config();
+                            }
+                            ui.indent(format!("desc_{:?}", basis), |ui| {
+                                ui.label(RichText::new(basis.description()).weak().small());
+                            });
+                            ui.add_space(2.0);
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 3. Quick Search Mode
+                        ui.label(RichText::new("Quick Search Mode").size(14.0).strong());
+                        ui.label(RichText::new("Behavior when typing letters in the file list:").weak().small());
+                        ui.add_space(2.0);
+
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::JumpToPrefix, "Jump to item by name (Explorer style)").on_hover_text("Jumps selection to matching prefix; typing same key repeatedly cycles matches").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::JumpToPrefix;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)").on_hover_text("Dynamically filters visible table rows with search query banner").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+                        if ui.selectable_label(self.config.quick_search_mode == QuickSearchMode::Disabled, "Disabled").clicked() {
+                            self.config.quick_search_mode = QuickSearchMode::Disabled;
+                            self.quick_search_buffer.clear();
+                            self.save_config();
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 4. File Visibility
+                        ui.label(RichText::new("File Visibility").size(14.0).strong());
+                        if ui.checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)").on_hover_text("Show hidden files and dotfiles").changed() {
+                            self.save_config();
+                            self.sort_entries();
+                        }
+                        if ui.checkbox(&mut self.config.show_system_files, "Show System Files & Junctions (Ctrl+Shift+H)").on_hover_text("Show protected system files and NTFS junctions").changed() {
+                            self.save_config();
+                            self.sort_entries();
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 5. Application Preferences
+                        ui.label(RichText::new("Application Preferences").size(14.0).strong());
+                        if ui.checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup").changed() {
+                            if !self.config.remember_last_path {
+                                self.config.last_path = None;
+                            }
+                            self.save_config();
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 6. Developer Cache Filter
+                        ui.label(RichText::new("Developer Cache Filter").size(14.0).strong());
+                        if ui.checkbox(&mut self.ignore_dev_caches, "Ignore dev caches (.git, node_modules, target, .cache, .venv)").changed() {
+                            self.config.ignore_dev_caches = self.ignore_dev_caches;
+                            self.save_config();
+                            trigger_rescan = true;
+                        }
+                        ui.label(RichText::new("Custom Exclude Names (comma-separated):").weak().small());
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(&mut self.custom_excludes)
+                                .hint_text(".git, node_modules, target, .cache, .venv")
+                        );
+                        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.config.custom_excludes = self.custom_excludes.clone();
+                            self.save_config();
+                            trigger_rescan = true;
+                        }
+                        if ui.button("Apply Filter Changes").clicked() {
+                            self.config.custom_excludes = self.custom_excludes.clone();
+                            self.save_config();
+                            trigger_rescan = true;
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // 7. Shortcuts Sheet
+                        if ui.button("View Keyboard Shortcuts (F1)").clicked() {
+                            self.show_shortcuts_modal = true;
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Done (Esc)").clicked() {
+                            close_settings = true;
+                        }
+                    });
+                });
+
+            if close_settings {
+                self.show_settings_modal = false;
+            }
+            if trigger_rescan {
+                self.trigger_scan();
+            }
         }
     }
 }
