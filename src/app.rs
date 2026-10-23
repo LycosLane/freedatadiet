@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use eframe::egui::{self, Color32, Panel, ProgressBar, RichText, ScrollArea, Vec2};
 
-use crate::config::{AppConfig, ColumnId};
+use crate::config::{AppConfig, ColumnId, UsageBasis};
 use crate::model::{format_size, DriveInfo, FileEntry, SortBy, SortDirection};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
@@ -326,6 +326,24 @@ impl eframe::App for FreeDataDietApp {
                 if ui.button(filter_label).clicked() {
                     self.show_exclude_bar = !self.show_exclude_bar;
                 }
+
+                ui.menu_button(format!("%: {}", self.config.usage_basis.label()), |ui| {
+                    if ui.selectable_label(self.config.usage_basis == UsageBasis::Folder, "Current Folder").clicked() {
+                        self.config.usage_basis = UsageBasis::Folder;
+                        self.save_config();
+                        ui.close();
+                    }
+                    if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveUsed, "Drive (Used Space)").clicked() {
+                        self.config.usage_basis = UsageBasis::DriveUsed;
+                        self.save_config();
+                        ui.close();
+                    }
+                    if ui.selectable_label(self.config.usage_basis == UsageBasis::DriveTotal, "Drive (Total Capacity)").clicked() {
+                        self.config.usage_basis = UsageBasis::DriveTotal;
+                        self.save_config();
+                        ui.close();
+                    }
+                });
             });
 
             // Exclude Filter Bar
@@ -552,6 +570,8 @@ impl eframe::App for FreeDataDietApp {
 
             let mut swap_columns = None;
             let mut sort_column = None;
+            let mut change_basis = None;
+            let current_basis = self.config.usage_basis;
 
             // Interactive Drag-and-Drop & Sortable Header Row
             ui.horizontal(|ui| {
@@ -567,7 +587,16 @@ impl eframe::App for FreeDataDietApp {
                     } else {
                         ""
                     };
-                    let label_text = format!("{}{}", col.title(), arrow);
+                    let col_title = if col == ColumnId::Usage {
+                        match current_basis {
+                            UsageBasis::Folder => "Usage (Dir)",
+                            UsageBasis::DriveUsed => "Usage (Drive)",
+                            UsageBasis::DriveTotal => "Usage (Total)",
+                        }
+                    } else {
+                        col.title()
+                    };
+                    let label_text = format!("{}{}", col_title, arrow);
 
                     let (header_rect, header_resp) = ui.allocate_exact_size(
                         Vec2::new(w, 24.0),
@@ -581,6 +610,25 @@ impl eframe::App for FreeDataDietApp {
                             egui::CursorIcon::Grab
                         })
                         .on_hover_text("Click to sort, drag left/right to reorder columns");
+
+                    if col == ColumnId::Usage {
+                        header_resp.context_menu(|ui| {
+                            ui.label(RichText::new("Usage Percentage Basis").strong());
+                            ui.separator();
+                            if ui.selectable_label(current_basis == UsageBasis::Folder, "Relative to Current Folder").clicked() {
+                                change_basis = Some(UsageBasis::Folder);
+                                ui.close();
+                            }
+                            if ui.selectable_label(current_basis == UsageBasis::DriveUsed, "Relative to Drive Used Space").clicked() {
+                                change_basis = Some(UsageBasis::DriveUsed);
+                                ui.close();
+                            }
+                            if ui.selectable_label(current_basis == UsageBasis::DriveTotal, "Relative to Drive Total Capacity").clicked() {
+                                change_basis = Some(UsageBasis::DriveTotal);
+                                ui.close();
+                            }
+                        });
+                    }
 
                     if header_resp.clicked() {
                         if let Some(target) = col.sort_by() {
@@ -675,15 +723,44 @@ impl eframe::App for FreeDataDietApp {
                 self.toggle_sort(target);
             }
 
+            if let Some(b) = change_basis {
+                self.config.usage_basis = b;
+                self.save_config();
+            }
+
             ui.add_space(2.0);
             ui.separator();
 
-            let max_size = self
-                .entries
-                .first()
-                .map(|e| e.size)
-                .unwrap_or(1)
-                .max(1) as f32;
+            let base_size: f64 = match self.config.usage_basis {
+                UsageBasis::Folder => {
+                    let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                    if sum > 0 {
+                        sum as f64
+                    } else {
+                        1.0
+                    }
+                }
+                UsageBasis::DriveUsed => {
+                    let drive = self.drives.iter().find(|d| self.current_path.starts_with(&d.path));
+                    let used = drive.map(|d| d.used_space()).unwrap_or(0);
+                    if used > 0 {
+                        used as f64
+                    } else {
+                        let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                        sum.max(1) as f64
+                    }
+                }
+                UsageBasis::DriveTotal => {
+                    let drive = self.drives.iter().find(|d| self.current_path.starts_with(&d.path));
+                    let total = drive.map(|d| d.total_space).unwrap_or(0);
+                    if total > 0 {
+                        total as f64
+                    } else {
+                        let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                        sum.max(1) as f64
+                    }
+                }
+            };
 
             let mut navigate_target = None;
             let mut scroll_to_selected = false;
@@ -821,9 +898,19 @@ impl eframe::App for FreeDataDietApp {
                                     ColumnId::Usage => {
                                         let bar_rect = egui::Rect::from_center_size(cell_rect.center(), Vec2::new(w - 10.0, 16.0));
                                         let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
-                                        let ratio = (entry.size as f32 / max_size).clamp(0.0, 1.0);
+                                        let ratio = (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32;
+                                        let percent = entry.size as f64 / base_size * 100.0;
+                                        let text = if percent >= 10.0 {
+                                            format!("{:.1}%", percent)
+                                        } else if percent >= 0.1 {
+                                            format!("{:.1}%", percent)
+                                        } else if percent > 0.0 {
+                                            format!("{:.2}%", percent)
+                                        } else {
+                                            "0.0%".to_string()
+                                        };
                                         let bar = ProgressBar::new(ratio)
-                                            .text(format!("{:.1}%", ratio * 100.0))
+                                            .text(text)
                                             .desired_width(w - 10.0);
                                         child_ui.add(bar);
                                     }

@@ -69,6 +69,24 @@ impl ColumnId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum UsageBasis {
+    #[default]
+    Folder,
+    DriveUsed,
+    DriveTotal,
+}
+
+impl UsageBasis {
+    pub fn label(&self) -> &'static str {
+        match self {
+            UsageBasis::Folder => "Folder",
+            UsageBasis::DriveUsed => "Drive (Used)",
+            UsageBasis::DriveTotal => "Drive (Total)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub column_order: Vec<ColumnId>,
@@ -77,6 +95,8 @@ pub struct AppConfig {
     pub ignore_dev_caches: bool,
     pub custom_excludes: String,
     pub last_path: Option<PathBuf>,
+    #[serde(default)]
+    pub usage_basis: UsageBasis,
 }
 
 impl Default for AppConfig {
@@ -88,6 +108,7 @@ impl Default for AppConfig {
             ignore_dev_caches: true,
             custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
             last_path: None,
+            usage_basis: UsageBasis::Folder,
         }
     }
 }
