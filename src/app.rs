@@ -1945,7 +1945,7 @@ impl eframe::App for FreeDataDietApp {
                             add_toggle(ui, "F5", "Refresh and rescan current directory", &mut self.config.shortcuts.f5_refresh);
 
                             add_sec(ui, "Preferences & View");
-                            add_fixed(ui, "F1", "Toggle this Keyboard Shortcuts cheat sheet");
+                            add_fixed(ui, "F1", "Toggle this Keyboard Shortcuts cheat sheet (open / close)");
                             add_toggle(ui, "F11", "Toggle fullscreen mode", &mut self.config.shortcuts.f11_fullscreen);
                             add_toggle(ui, "F12", "Open Settings & Preferences dialog", &mut self.config.shortcuts.f12_settings);
                             add_toggle(ui, "Ctrl + ,", "Open Settings & Preferences dialog", &mut self.config.shortcuts.ctrl_comma_settings);
@@ -1966,9 +1966,9 @@ impl eframe::App for FreeDataDietApp {
                     ui.add_space(8.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Press Esc or click outside to return").weak().small());
+                        ui.label(RichText::new("Press Esc / F1 or click outside to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close (Esc)").clicked() {
+                            if ui.button("Close (Esc / F1)").clicked() {
                                 close_shortcuts = true;
                             }
                         });
@@ -1996,7 +1996,8 @@ impl eframe::App for FreeDataDietApp {
 
         // --- SETTINGS MODAL ---
         if self.show_settings_modal {
-            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let f12_pressed = self.config.shortcuts.f12_settings && ui.input(|i| i.key_pressed(egui::Key::F12));
+            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape)) || f12_pressed;
             let mut trigger_rescan = false;
 
             let nav_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
@@ -2258,9 +2259,9 @@ impl eframe::App for FreeDataDietApp {
                     ui.add_space(8.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Press Esc or click outside to return").weak().small());
+                        ui.label(RichText::new("Press Esc / F12 or click outside to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let resp_done = ui.button("Done (Esc)");
+                            let resp_done = ui.button("Done (Esc / F12)");
                             if sel_idx == 17 {
                                 ui.painter().rect_stroke(
                                     resp_done.rect.expand(2.0),

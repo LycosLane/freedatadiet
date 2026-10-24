@@ -4,7 +4,7 @@
 > A fast, zero-bloat disk usage analyzer built in native Rust & egui.  
 > *Find what is eating your gigabytes without subscriptions, ads, or background services.*
 
-[![Version: 0.5.5](https://img.shields.io/badge/version-0.5.5-blue.svg)]()
+[![Version: 0.5.6](https://img.shields.io/badge/version-0.5.6-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
@@ -53,7 +53,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | **Ctrl + H** | Toggle hidden files and folders |
 | **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
 | **Ctrl + ,  /  Alt + S** | Open Settings dialog |
-| **F1  /  ?** | Open Keyboard Shortcuts cheat sheet |
+| **F1  /  ?** | Toggle Keyboard Shortcuts cheat sheet |
 | **F5** | Refresh and rescan current directory |
 | **Double Click** | Enter directory or open file |
 | **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
