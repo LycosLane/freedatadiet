@@ -123,9 +123,17 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Build release binary
-        run: cargo build --release --locked
+      - name: Build universal release binary (Intel + Apple Silicon)
+        run: |
+          cargo build --release --locked --target x86_64-apple-darwin
+          cargo build --release --locked --target aarch64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/freedatadiet \
+            target/x86_64-apple-darwin/release/freedatadiet \
+            target/aarch64-apple-darwin/release/freedatadiet
 
       - name: Package macOS .app and .dmg
         run: |
@@ -163,6 +171,9 @@ jobs:
           </dict>
           </plist>
           EOF
+
+          # Apple Silicon refuses unsigned binaries: apply an ad-hoc signature
+          codesign --force --deep --sign - "${APP_BUNDLE}"
 
           # Create DMG staging directory with Applications shortcut
           DMG_STAGING="dmg_staging"

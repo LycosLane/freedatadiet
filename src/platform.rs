@@ -18,6 +18,7 @@ mod win {
 
         fn GetDriveTypeW(lpRootPathName: *const u16) -> u32;
         fn GetCompressedFileSizeW(lpFileName: *const u16, lpFileSizeHigh: *mut u32) -> u32;
+        fn SetErrorMode(uMode: u32) -> u32;
     }
 
     #[link(name = "shell32")]
@@ -124,12 +125,16 @@ mod win {
 
     pub fn get_drives() -> Vec<DriveInfo> {
         let mut drives = Vec::new();
+        // Suppress "No disk in drive" system dialogs for empty removable drives.
+        // SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
+        unsafe { SetErrorMode(0x8001) };
         for letter in b'A'..=b'Z' {
             let root = format!("{}:\\", letter as char);
             let wide = to_wide(&root);
             let drive_type = unsafe { GetDriveTypeW(wide.as_ptr()) };
-            // 2: DRIVE_REMOVABLE, 3: DRIVE_FIXED, 4: DRIVE_REMOTE, 5: DRIVE_CDROM, 6: DRIVE_RAMDISK
-            if drive_type >= 2 && drive_type <= 6 {
+            // 2: DRIVE_REMOVABLE, 3: DRIVE_FIXED, 5: DRIVE_CDROM, 6: DRIVE_RAMDISK.
+            // 4 (DRIVE_REMOTE) is skipped: an unreachable network share can block startup for a minute.
+            if matches!(drive_type, 2 | 3 | 5 | 6) {
                 let mut free_avail = 0u64;
                 let mut total = 0u64;
                 let mut free_total = 0u64;
@@ -165,30 +170,59 @@ mod win {
         } else if file_size == 0 {
             0
         } else {
-            ((file_size + 4095) / 4096) * 4096
+            file_size.div_ceil(4096) * 4096
+        }
+    }
+
+    /// Runs a shell verb on a path through the Win32 shell directly (no cmd.exe, no PowerShell),
+    /// so file names containing &, ^, % or quotes are never interpreted as commands.
+    fn shell_execute(verb: &str, file: &Path, params: Option<&str>) -> bool {
+        let wide_file: Vec<u16> = file.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let wide_verb = to_wide(verb);
+        let wide_params = params.map(to_wide);
+
+        let mut sei = SHELLEXECUTEINFOW {
+            cb_size: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            f_mask: 0,
+            hwnd: 0,
+            lp_verb: wide_verb.as_ptr(),
+            lp_file: wide_file.as_ptr(),
+            lp_parameters: wide_params.as_ref().map_or(std::ptr::null(), |p| p.as_ptr()),
+            lp_directory: std::ptr::null(),
+            n_show: 1, // SW_SHOWNORMAL
+            h_inst_app: 0,
+            lp_id_list: std::ptr::null_mut(),
+            lp_class: std::ptr::null(),
+            hkey_class: 0,
+            dw_hot_key: 0,
+            h_icon_or_monitor: 0,
+            h_process: 0,
+        };
+        unsafe { ShellExecuteExW(&mut sei) != 0 }
+    }
+
+    pub fn open_file_win(path: &Path) -> Result<(), std::io::Error> {
+        if shell_execute("open", path, None) {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
     }
 
     pub fn restart_as_admin(current_path: Option<&Path>) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut cmd = std::process::Command::new("powershell");
-        let arg_path = current_path
-            .map(|p| format!(" -ArgumentList '\"{}\"'", p.display()))
-            .unwrap_or_default();
-        let script = format!(
-            "Start-Process -FilePath '{}'{} -Verb RunAs",
-            exe.display(),
-            arg_path
-        );
-        cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
-        cmd.spawn().map_err(|e| e.to_string())?;
-        std::process::exit(0);
+        let params = current_path.map(|p| format!("\"{}\"", p.display()));
+        // Only exit once the elevation prompt was accepted; cancelling keeps this instance alive.
+        if shell_execute("runas", &exe, params.as_deref()) {
+            std::process::exit(0);
+        }
+        Err("Elevation was cancelled or failed".to_string())
     }
 }
 
 #[cfg(not(windows))]
 mod unix {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use crate::model::DriveInfo;
 
     pub fn is_admin() -> bool {
@@ -227,6 +261,23 @@ mod unix {
         }
 
         if drives.is_empty() {
+            // macOS has no /proc/mounts: external disks and secondary volumes live in /Volumes.
+            if let Ok(entries) = std::fs::read_dir("/Volumes") {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if let Some(stat) = p.to_str().and_then(|s| statvfs_path(s).ok()) {
+                        drives.push(DriveInfo {
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            path: p,
+                            total_space: stat.0,
+                            available_space: stat.1,
+                        });
+                    }
+                }
+            }
+        }
+
+        if drives.is_empty() {
             if let Ok(stat) = statvfs_path("/") {
                 drives.push(DriveInfo {
                     name: "/".to_string(),
@@ -241,7 +292,7 @@ mod unix {
 
     fn statvfs_path(path: &str) -> Result<(u64, u64), std::io::Error> {
         use std::ffi::CString;
-        let c_path = CString::new(path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let c_path = CString::new(path).map_err(std::io::Error::other)?;
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         let res = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
         if res == 0 {
@@ -263,19 +314,10 @@ mod unix {
         }
     }
 
-    pub fn restart_as_admin(current_path: Option<&Path>) -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut cmd = std::process::Command::new("pkexec");
-        cmd.arg(&exe);
-        if let Some(p) = current_path {
-            cmd.arg(p);
-        }
-        cmd.spawn().map_err(|e| e.to_string())?;
-        std::process::exit(0);
-    }
-
-    pub fn show_properties(path: &Path) -> Result<(), String> {
-        crate::platform::open_in_file_manager(path).map_err(|e| e.to_string())
+    pub fn restart_as_admin(_current_path: Option<&Path>) -> Result<(), String> {
+        // pkexec/sudo scrub DISPLAY/WAYLAND_DISPLAY and cannot report a cancelled prompt back,
+        // so relaunching would either crash on startup or silently close this window.
+        Err("Start FreeDataDiet from a terminal with: sudo -E freedatadiet".to_string())
     }
 }
 
@@ -289,8 +331,10 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(windows)]
     {
         if path.is_file() {
+            use std::os::windows::process::CommandExt;
+            // raw_arg keeps the quotes intact so paths with commas or spaces are selected correctly
             std::process::Command::new("explorer")
-                .arg(format!("/select,\"{}\"", path.display()))
+                .raw_arg(format!("/select,\"{}\"", path.display()))
                 .spawn()?;
         } else {
             std::process::Command::new("explorer")
@@ -325,9 +369,7 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
 pub fn open_file(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &path.display().to_string()])
-            .spawn()?;
+        win::open_file_win(path)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -363,6 +405,7 @@ pub fn set_clipboard_text(text: &str) -> bool {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> isize;
+        fn GlobalFree(hMem: isize) -> isize;
         fn GlobalLock(hMem: isize) -> *mut std::ffi::c_void;
         fn GlobalUnlock(hMem: isize) -> i32;
     }
@@ -384,15 +427,21 @@ pub fn set_clipboard_text(text: &str) -> bool {
         }
 
         let ptr = GlobalLock(h_mem) as *mut u16;
-        if !ptr.is_null() {
-            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
-            GlobalUnlock(h_mem);
-            // CF_UNICODETEXT = 13
-            SetClipboardData(13, h_mem);
+        if ptr.is_null() {
+            GlobalFree(h_mem);
+            CloseClipboard();
+            return false;
         }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        GlobalUnlock(h_mem);
 
+        // CF_UNICODETEXT = 13. On success the clipboard owns the memory; on failure we must free it.
+        let ok = SetClipboardData(13, h_mem) != 0;
+        if !ok {
+            GlobalFree(h_mem);
+        }
         CloseClipboard();
-        true
+        ok
     }
 }
 

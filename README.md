@@ -17,8 +17,8 @@
 Pre-compiled, zero-dependency release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page:
 
 ### Windows
-* **Portable ZIP (`freedatadiet-windows-x64.zip`):** Download, extract anywhere, and run `freedatadiet.exe`. Zero installer, completely self-contained.
-* **Standalone Executable (`freedatadiet-windows-x64.exe`):** Single-file executable ready to launch.
+* **Portable ZIP (`freedatadiet-<version>-windows-x64.zip`):** Download, extract anywhere, and run `freedatadiet.exe`. Zero installer, completely self-contained.
+* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single-file executable ready to launch.
 
 ### Linux
 * **Fast-Track Native Binary (`.tar.gz`):** Pure native ELF binary. Instant startup (<5ms) with zero container overhead. Extract and run `./freedatadiet` or move to `/usr/local/bin/`.
@@ -27,10 +27,10 @@ Pre-compiled, zero-dependency release packages are published on the **[Releases]
   ```bash
   yay -S freedatadiet
   ```
-* **AppImage (`FreeDataDiet-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution. Make executable (`chmod +x`) and run.
+* **AppImage (`FreeDataDiet-<version>-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution. Make executable (`chmod +x`) and run.
 
 ### macOS
-* **Apple Disk Image (`FreeDataDiet-macos.dmg`):** Open the `.dmg` and drag `FreeDataDiet.app` into your `Applications` folder.
+* **Apple Disk Image (`FreeDataDiet-<version>-macos.dmg`):** Open the `.dmg` and drag `FreeDataDiet.app` into your `Applications` folder.
 * **Standalone Tarball (`.tar.gz`):** Native standalone command-line / homebrew executable.
 
 ---
@@ -65,10 +65,11 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | **Up / Down** | Navigate selection through folder rows |
 | **Home / End** | Jump to top / bottom of current listing |
 | **PageUp / PageDown** | Scroll up / down by 15 items |
-| **Right Arrow / Enter** | Enter selected directory or launch file |
+| **Right Arrow** | Enter selected folder |
+| **Enter** | Enter selected folder or open selected file |
 | **Backspace / Left** | Navigate up to parent directory |
-| **A-Z, 0-9 (Quick Search)** | Jump to prefix (Explorer style) or live filter visible rows |
-| **F2** | Cycle search mode (Jump to First Letter vs Live Filter) |
+| **A-Z, 0-9 (Quick Search)** | Jump to name (Explorer style) or live filter visible rows |
+| **F2** | Cycle search mode (Jump to Name vs Live Filter) |
 | **F3** | Activate / toggle Live Filter search bar |
 | **Esc** | Clear search filter or close open dialogs |
 | **Delete** | Move selected item to Recycle Bin / Trash |
@@ -81,7 +82,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | **F5** | Refresh and rescan current directory |
 | **F11** | Toggle fullscreen mode |
 | **Double Click** | Enter directory or open file |
-| **Right Click** | Context menu (Open, Explorer, Copy Path, Properties, Trash, Permanent Delete) |
+| **Right Click** | Context menu (Open, Show in file manager, Copy name / path, Properties on Windows, Trash, Permanent Delete) |
 | **Header Click** | Sort by column (click again to invert, 3rd click resets) |
 | **Header Drag & Drop** | Reorder table columns interactively |
 | **`Restart as Admin`** | Elevate to Administrator permissions |
@@ -91,7 +92,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 ## Features & Highlights
 
 * **Live Discovery:** Folders appear immediately upon scan start with live size calculations.
-* **Type Badges:** Aligned badges (`[DIR]`, `[SYS]`, `[JUNC]`, `[FILE]`) keep names strictly aligned.
+* **Type Badges:** Aligned badges (`[DIR]`, `[SYS]`, `[LINK]`, `[LOCK]`, `[PART]`, `[FILE]`) keep names aligned. Hover a badge for its meaning.
 * **Themes:** Built-in Dark Mode, Light Mode, and automatic OS system theme detection.
 * **Usage Bar Scaling:** Scale bars relative to the largest item in view, current folder total, used drive space, or full disk capacity.
 * **Quick Search Modes:** Jump to files by typing a prefix (Explorer style) or live filter matching rows (FilePilot style).
@@ -102,10 +103,10 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 ## Configuration (`config.json`)
 
-Settings persist in a human-readable `config.json` next to the executable:
+Settings persist in a human-readable `config.json`. It lives next to the executable if one exists there (portable use, default on Windows when the folder is writable), otherwise in your user config folder (`%APPDATA%\FreeDataDiet`, `~/.config/FreeDataDiet`, `~/Library/Application Support/FreeDataDiet`):
 * Theme (`"Dark"`, `"Light"`, `"System"`)
 * Usage bar scaling (`"LargestItem"`, `"Folder"`, `"DriveUsed"`, `"DriveTotal"`)
-* Column order & visibility
+* Column order
 * Multi-column sort rules
 * Show hidden / system / locked files toggles
 * Quick search mode (`"JumpToPrefix"`, `"LiveFilter"`, `"Disabled"`)
@@ -123,8 +124,6 @@ git clone https://github.com/LycosLane/FreeDataDiet.git
 cd FreeDataDiet
 
 # Build release executable
-cargo build --release
-```
 cargo build --release
 
 # Run

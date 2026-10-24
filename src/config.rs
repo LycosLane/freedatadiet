@@ -232,13 +232,47 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Location of `config.json`.
+    /// Portable: next to the executable if a config already lives there (or, on Windows, the folder is writable).
+    /// Otherwise the per-user config directory, so installs in /usr/bin, AppImages and .app bundles still persist settings.
     pub fn config_path() -> PathBuf {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
+        let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()));
+
+        if let Some(dir) = &exe_dir {
+            let portable = dir.join("config.json");
+            if portable.is_file() {
+                return portable;
+            }
+            #[cfg(windows)]
+            if Self::dir_is_writable(dir) {
+                return portable;
+            }
+        }
+
+        #[cfg(windows)]
+        let base = std::env::var_os("APPDATA").map(PathBuf::from);
+        #[cfg(target_os = "macos")]
+        let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+
+        if let Some(base) = base {
+            let dir = base.join("FreeDataDiet");
+            if std::fs::create_dir_all(&dir).is_ok() {
                 return dir.join("config.json");
             }
         }
-        PathBuf::from("config.json")
+        exe_dir.map(|d| d.join("config.json")).unwrap_or_else(|| PathBuf::from("config.json"))
+    }
+
+    #[cfg(windows)]
+    fn dir_is_writable(dir: &std::path::Path) -> bool {
+        let probe = dir.join(".fdd_write_test");
+        let ok = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        ok
     }
 
     pub fn load() -> Self {
@@ -260,6 +294,8 @@ impl AppConfig {
                     return cfg;
                 }
             }
+            // Unreadable or corrupt file: keep a copy instead of silently overwriting the user's settings
+            let _ = std::fs::rename(&path, path.with_extension("json.bak"));
         }
         let cfg = Self::default();
         let _ = cfg.save();
@@ -268,9 +304,11 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), std::io::Error> {
         let path = Self::config_path();
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(path, json)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        // Write to a temp file and rename so a crash mid-write cannot leave a truncated config
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &path)?;
         Ok(())
     }
 }

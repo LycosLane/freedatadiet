@@ -75,7 +75,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let path = entry.path();
                 let meta_opt = fs::symlink_metadata(&path).ok();
-                let is_dir = meta_opt.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                let is_dir = meta_opt.as_ref().map(|m| is_dir_entry(&path, m)).unwrap_or(false);
                 let modified = meta_opt.as_ref().and_then(|m| m.modified().ok());
 
                 let (size, allocated, is_scanning) = if !is_dir {
@@ -119,7 +119,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
         let child_paths = Arc::new(child_paths);
         let (worker_tx, worker_rx) = channel();
 
-        let chunk_size = (child_paths.len() + num_cpus - 1).max(1) / num_cpus;
+        let chunk_size = child_paths.len().div_ceil(num_cpus).max(1);
         let mut handles = Vec::new();
 
         for chunk_idx in 0..num_cpus {
@@ -152,11 +152,18 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
 
         let mut last_progress_report = Instant::now();
         for entry in worker_rx {
+            if cancel_clone.load(Ordering::Relaxed) {
+                break;
+            }
             total_size += entry.size;
             total_allocated += entry.allocated_size;
             total_files += if entry.is_dir { entry.item_count } else { 1 };
 
-            let _ = tx.send(ScanMessage::EntryUpdated(entry));
+            // The UI dropped its receiver (navigated away): stop and let the workers wind down
+            if tx.send(ScanMessage::EntryUpdated(entry)).is_err() {
+                cancel_clone.store(true, Ordering::Relaxed);
+                break;
+            }
 
             if last_progress_report.elapsed() > Duration::from_millis(50) {
                 let count = total_counter.load(Ordering::Relaxed);
@@ -192,16 +199,20 @@ fn matches_exclude(name: &str, excludes: &[String]) -> bool {
         if pattern.is_empty() {
             continue;
         }
-        if pattern.starts_with('*') {
-            let suffix = &pattern[1..];
+        if let Some(suffix) = pattern.strip_prefix('*') {
             if lower.ends_with(suffix) {
                 return true;
             }
-        } else if lower == pattern || lower.contains(pattern) {
+        } else if lower == pattern {
             return true;
         }
     }
     false
+}
+
+/// `symlink_metadata().is_dir()` is false for links, so follow the link only to learn whether it points at a folder.
+fn is_dir_entry(path: &Path, meta: &fs::Metadata) -> bool {
+    meta.is_dir() || (meta.file_type().is_symlink() && fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false))
 }
 
 fn process_single_entry(
@@ -231,7 +242,7 @@ fn process_single_entry(
     };
 
     let modified = metadata.modified().ok();
-    let is_dir = metadata.is_dir();
+    let is_dir = is_dir_entry(path, &metadata);
 
     if !is_dir {
         let size = metadata.len();
@@ -248,23 +259,19 @@ fn process_single_entry(
             false,
         )
     } else {
-        // If this directory is a junction or symlink, skip recursing
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if (metadata.file_attributes() & 0x0000_0400) != 0 || metadata.file_type().is_symlink() {
-                return FileEntry::new(
-                    name.to_string(),
-                    path.to_path_buf(),
-                    true,
-                    0,
-                    0,
-                    modified,
-                    0,
-                    false,
-                    false,
-                );
-            }
+        // Junctions and symlinks are listed but never followed, so loops and double counting cannot happen
+        if metadata.file_type().is_symlink() {
+            return FileEntry::new(
+                name.to_string(),
+                path.to_path_buf(),
+                true,
+                0,
+                0,
+                modified,
+                0,
+                false,
+                false,
+            );
         }
 
         // If this directory itself is excluded, skip walking children
@@ -317,18 +324,9 @@ fn process_single_entry(
                             if let Ok(meta) = fs::symlink_metadata(&sub_path) {
                                 count += 1;
                                 if meta.is_dir() {
-                                    #[cfg(windows)]
-                                    {
-                                        use std::os::windows::fs::MetadataExt;
-                                        if (meta.file_attributes() & 0x0000_0400) != 0 || meta.file_type().is_symlink() {
-                                            continue;
-                                        }
-                                    }
-                                    #[cfg(not(windows))]
-                                    {
-                                        if meta.file_type().is_symlink() {
-                                            continue;
-                                        }
+                                    // Never follow links (symlinks, junctions) while walking
+                                    if meta.file_type().is_symlink() {
+                                        continue;
                                     }
                                     stack.push(sub_path);
                                 } else {

@@ -64,7 +64,7 @@ fn get_context_menu_items(entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
     });
     items.push(ContextMenuItem {
         action: ContextAction::ShowInExplorer,
-        label: "Show in Explorer".to_string(),
+        label: if cfg!(windows) { "Show in Explorer" } else { "Show in File Manager" }.to_string(),
         color: None,
     });
     items.push(ContextMenuItem {
@@ -90,7 +90,7 @@ fn get_context_menu_items(entry: &ActiveContextMenu) -> Vec<ContextMenuItem> {
     });
     items.push(ContextMenuItem {
         action: ContextAction::MoveToTrash,
-        label: "Move to Recycle Bin".to_string(),
+        label: if cfg!(windows) { "Move to Recycle Bin" } else { "Move to Trash" }.to_string(),
         color: Some(Color32::from_rgb(255, 200, 100)),
     });
     items.push(ContextMenuItem {
@@ -115,6 +115,8 @@ pub struct FreeDataDietApp {
     quick_search_buffer: String,
     quick_search_time: Option<Instant>,
     filter_bar_active: bool,
+    cached_system_dark: bool,
+    last_theme_check: Instant,
 
     // Exclude filters
     ignore_dev_caches: bool,
@@ -145,24 +147,14 @@ impl FreeDataDietApp {
         let drives = platform::get_drives();
         let is_admin = platform::is_admin();
 
+        let fallback = drives
+            .first()
+            .map(|d| d.path.clone())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let start_path = if config.remember_last_path {
-            if let Some(ref last) = config.last_path {
-                if last.is_dir() {
-                    last.clone()
-                } else if let Some(first_drive) = drives.first() {
-                    first_drive.path.clone()
-                } else {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                }
-            } else if let Some(first_drive) = drives.first() {
-                first_drive.path.clone()
-            } else {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            }
-        } else if let Some(first_drive) = drives.first() {
-            first_drive.path.clone()
+            config.last_path.as_ref().filter(|p| p.is_dir()).cloned().unwrap_or(fallback)
         } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            fallback
         };
 
         let mut app = Self {
@@ -178,6 +170,8 @@ impl FreeDataDietApp {
             quick_search_buffer: String::new(),
             quick_search_time: None,
             filter_bar_active: false,
+            cached_system_dark: platform::is_system_dark_mode(),
+            last_theme_check: Instant::now(),
             scanner: None,
             is_scanning: false,
             scanned_counter: 0,
@@ -268,6 +262,7 @@ impl FreeDataDietApp {
             }
         }
 
+        let mut needs_sort = false;
         for msg in messages {
             match msg {
                 ScanMessage::Progress { scanned_items } => {
@@ -275,7 +270,7 @@ impl FreeDataDietApp {
                 }
                 ScanMessage::InitialEntries(entries) => {
                     self.entries = entries;
-                    self.sort_entries();
+                    needs_sort = true;
                 }
                 ScanMessage::EntryUpdated(entry) => {
                     if let Some(existing) = self.entries.iter_mut().find(|e| e.path == entry.path) {
@@ -289,21 +284,27 @@ impl FreeDataDietApp {
                     } else {
                         self.entries.push(entry);
                     }
-                    self.sort_entries();
+                    needs_sort = true;
                 }
                 ScanMessage::Completed(sum) => {
                     self.summary = Some(sum);
                     self.is_scanning = false;
+                    self.scanner = None;
                     for e in &mut self.entries {
                         e.is_scanning = false;
                     }
-                    self.sort_entries();
+                    needs_sort = true;
                 }
                 ScanMessage::Failed(err) => {
                     self.error_message = Some(err);
                     self.is_scanning = false;
+                    self.scanner = None;
                 }
             }
+        }
+        // Sort once per frame instead of once per message
+        if needs_sort {
+            self.sort_entries();
         }
     }
 
@@ -323,7 +324,7 @@ impl FreeDataDietApp {
                         }
                     }
                     ColumnId::Name => {
-                        let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+                        let cmp = a.name.chars().flat_map(char::to_lowercase).cmp(b.name.chars().flat_map(char::to_lowercase));
                         match rule.direction {
                             SortDirection::Ascending => cmp,
                             SortDirection::Descending => cmp.reverse(),
@@ -421,7 +422,7 @@ impl FreeDataDietApp {
                 }
             }
 
-            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            a.name.chars().flat_map(char::to_lowercase).cmp(b.name.chars().flat_map(char::to_lowercase))
         });
     }
 
@@ -481,7 +482,7 @@ fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32, &'stati
         (
             "[SYS]".to_string(),
             if is_dark { Color32::from_rgb(255, 175, 40) } else { Color32::from_rgb(200, 110, 0) },
-            "System: Protected Windows system directory or file",
+            "System: Protected system directory or file",
         )
     } else if entry.is_access_denied {
         (
@@ -530,7 +531,14 @@ impl eframe::App for FreeDataDietApp {
         let is_dark = match self.config.theme {
             AppTheme::Dark => true,
             AppTheme::Light => false,
-            AppTheme::System => platform::is_system_dark_mode(),
+            AppTheme::System => {
+                // The OS theme rarely changes: poll it every couple of seconds instead of every frame
+                if self.last_theme_check.elapsed() > Duration::from_secs(2) {
+                    self.cached_system_dark = platform::is_system_dark_mode();
+                    self.last_theme_check = Instant::now();
+                }
+                self.cached_system_dark
+            }
         };
         if is_dark {
             ui.ctx().set_visuals(egui::Visuals::dark());
@@ -541,7 +549,7 @@ impl eframe::App for FreeDataDietApp {
         self.poll_scanner();
 
         if self.is_scanning {
-            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
 
         // Global F1 / ? shortcut for Shortcuts Help (always active everywhere)
@@ -561,11 +569,12 @@ impl eframe::App for FreeDataDietApp {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fs));
         }
 
-        // Global F12 & Ctrl+, for Settings dialog (always toggleable)
+        // Global F12 & Ctrl+, for Settings dialog (always toggleable, but not on top of the shortcuts sheet)
         let f12_pressed = ui.input(|i| i.key_pressed(egui::Key::F12));
         let ctrl_comma_pressed = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Comma));
-        if (self.config.shortcuts.f12_settings && f12_pressed)
-            || (self.config.shortcuts.ctrl_comma_settings && ctrl_comma_pressed)
+        if !self.show_shortcuts_modal
+            && ((self.config.shortcuts.f12_settings && f12_pressed)
+                || (self.config.shortcuts.ctrl_comma_settings && ctrl_comma_pressed))
         {
             self.show_settings_modal = !self.show_settings_modal;
             self.settings_just_opened = self.show_settings_modal;
@@ -616,7 +625,7 @@ impl eframe::App for FreeDataDietApp {
                 };
                 let mode_str = match self.config.quick_search_mode {
                     QuickSearchMode::LiveFilter => "Quick Search: Live Filter",
-                    QuickSearchMode::JumpToPrefix => "Quick Search: Jump to First Letter",
+                    QuickSearchMode::JumpToPrefix => "Quick Search: Jump to Name",
                     QuickSearchMode::Disabled => "Quick Search: Disabled",
                 };
                 self.status_toast = Some((mode_str.to_string(), Instant::now()));
@@ -626,7 +635,7 @@ impl eframe::App for FreeDataDietApp {
                 self.config.show_system_files = !self.config.show_system_files;
                 self.save_config();
                 self.sort_entries();
-            } else if self.config.shortcuts.ctrl_h_hidden && ctrl && h_pressed {
+            } else if self.config.shortcuts.ctrl_h_hidden && ctrl && !shift && h_pressed {
                 self.config.show_hidden_files = !self.config.show_hidden_files;
                 self.save_config();
                 self.sort_entries();
@@ -675,7 +684,9 @@ impl eframe::App for FreeDataDietApp {
                         .button(RichText::new("Restart as Admin").small())
                         .clicked()
                     {
-                        let _ = platform::restart_as_admin(Some(&self.current_path));
+                        if let Err(msg) = platform::restart_as_admin(Some(&self.current_path)) {
+                            self.status_toast = Some((msg, Instant::now()));
+                        }
                     }
                 });
             });
@@ -747,28 +758,18 @@ impl eframe::App for FreeDataDietApp {
         Panel::bottom("bottom_panel").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if let Some((toast, time)) = &self.status_toast {
-                    if time.elapsed() < Duration::from_secs(3) {
-                        ui.label(RichText::new(toast).color(Color32::from_rgb(100, 220, 150)).strong());
-                    } else if self.is_scanning {
-                        ui.spinner();
-                        ui.label(format!(
-                            "Scanning storage... {} items analyzed",
-                            self.scanned_counter
-                        ));
-                    } else if let Some(summary) = &self.summary {
-                        ui.label(RichText::new(format!(
-                            "Scanned in {:.2}s  |  {} items  |  Total: {} (On Disk: {})",
-                            summary.duration.as_secs_f32(),
-                            summary.total_files,
-                            format_size(summary.total_size),
-                            format_size(summary.total_allocated)
-                        )).small());
-                    } else if let Some(err) = &self.error_message {
-                        ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
+                if let Some((_, time)) = &self.status_toast {
+                    if time.elapsed() >= Duration::from_secs(3) {
+                        self.status_toast = None;
                     } else {
-                        ui.label("Ready");
+                        ui.ctx().request_repaint_after(Duration::from_millis(250));
                     }
+                }
+
+                if let Some((toast, _)) = &self.status_toast {
+                    ui.label(RichText::new(toast).color(Color32::from_rgb(100, 220, 150)).strong());
+                } else if let Some(err) = &self.error_message {
+                    ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
                 } else if self.is_scanning {
                     ui.spinner();
                     ui.label(format!(
@@ -778,7 +779,11 @@ impl eframe::App for FreeDataDietApp {
                     if ui.button("Cancel").clicked() {
                         if let Some(scanner) = &self.scanner {
                             scanner.cancel();
-                            self.is_scanning = false;
+                        }
+                        self.scanner = None;
+                        self.is_scanning = false;
+                        for e in &mut self.entries {
+                            e.is_scanning = false;
                         }
                     }
                 } else if let Some(summary) = &self.summary {
@@ -789,8 +794,6 @@ impl eframe::App for FreeDataDietApp {
                         format_size(summary.total_size),
                         format_size(summary.total_allocated)
                     )).small());
-                } else if let Some(err) = &self.error_message {
-                    ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
                 } else {
                     ui.label("Ready");
                 }
@@ -1073,7 +1076,6 @@ impl eframe::App for FreeDataDietApp {
             let mut scroll_to_selected = false;
             let mut open_context_menu: Option<ActiveContextMenu> = None;
             let mut do_navigate_up = false;
-            let mut do_trigger_rescan = false;
 
             let visible_entries: Vec<(usize, &FileEntry)> = self.entries
                 .iter()
@@ -1151,7 +1153,6 @@ impl eframe::App for FreeDataDietApp {
                 let page_down = ui.input(|i| i.key_pressed(egui::Key::PageDown));
                 let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
                 let shift = ui.input(|i| i.modifiers.shift);
-                let refresh = ui.input(|i| i.key_pressed(egui::Key::F5));
                 let context_key = ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
 
                 // Quick Search handling
@@ -1324,10 +1325,6 @@ impl eframe::App for FreeDataDietApp {
                         just_opened: true,
                     });
                 }
-
-                if refresh {
-                    do_trigger_rescan = true;
-                }
             }
 
             let mut clear_search_buffer = false;
@@ -1461,9 +1458,7 @@ impl eframe::App for FreeDataDietApp {
                                         } else {
                                             let ratio = (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32;
                                             let percent = entry.size as f64 / base_size * 100.0;
-                                            let text = if percent >= 10.0 {
-                                                format!("{:.1}%", percent)
-                                            } else if percent >= 0.1 {
+                                            let text = if percent >= 0.1 {
                                                 format!("{:.1}%", percent)
                                             } else if percent > 0.0 {
                                                 format!("{:.2}%", percent)
@@ -1582,9 +1577,6 @@ impl eframe::App for FreeDataDietApp {
             }
             if do_navigate_up {
                 self.navigate_up();
-            }
-            if do_trigger_rescan {
-                self.trigger_scan();
             }
         });
 
@@ -1784,6 +1776,12 @@ impl eframe::App for FreeDataDietApp {
             let modal_enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
             let modal_escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
+            // Permanent deletion is never offered for protected system paths or drive roots
+            let perm_blocked = is_system || path.parent().is_none();
+            if perm_blocked && self.modal_focus == DeleteModalFocus::Permanent {
+                self.modal_focus = if nav_prev { DeleteModalFocus::Trash } else { DeleteModalFocus::Cancel };
+            }
+
             if modal_escape {
                 close_modal = true;
             }
@@ -1794,7 +1792,7 @@ impl eframe::App for FreeDataDietApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
                     if is_system {
-                        ui.label(RichText::new("[!] WARNING: Protected system path! Deleting may break your operating system.").color(Color32::RED).strong());
+                        ui.label(RichText::new("[!] Protected system path: permanent deletion is disabled.").color(Color32::RED).strong());
                         ui.add_space(4.0);
                     }
                     ui.label(RichText::new(format!("Do you want to delete \"{}\"?", name)).size(14.0));
@@ -1832,7 +1830,7 @@ impl eframe::App for FreeDataDietApp {
                             .fill(if is_cancel { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
 
                         let do_trash = ui.add(trash_btn).clicked() || (is_trash && modal_enter);
-                        let do_perm = ui.add(perm_btn).clicked() || (is_perm && modal_enter);
+                        let do_perm = ui.add_enabled(!perm_blocked, perm_btn).clicked() || (is_perm && modal_enter && !perm_blocked);
                         let do_cancel = ui.add(cancel_btn).clicked() || (is_cancel && modal_enter);
 
                         if do_trash {
@@ -1844,20 +1842,20 @@ impl eframe::App for FreeDataDietApp {
                             close_modal = true;
                         } else if do_perm {
                             let res = if path.is_dir() {
-                                let is_link = std::fs::symlink_metadata(&path).map(|m| {
-                                    m.file_type().is_symlink() || {
-                                        #[cfg(windows)]
-                                        {
-                                            use std::os::windows::fs::MetadataExt;
-                                            (m.file_attributes() & 0x0000_0400) != 0
-                                        }
-                                        #[cfg(not(windows))]
-                                        false
-                                    }
-                                }).unwrap_or(false);
+                                // Links are removed, never followed. Windows needs rmdir, Unix needs unlink.
+                                let is_link = std::fs::symlink_metadata(&path)
+                                    .map(|m| m.file_type().is_symlink())
+                                    .unwrap_or(false);
 
                                 if is_link {
-                                    std::fs::remove_dir(&path)
+                                    #[cfg(windows)]
+                                    {
+                                        std::fs::remove_dir(&path)
+                                    }
+                                    #[cfg(not(windows))]
+                                    {
+                                        std::fs::remove_file(&path)
+                                    }
                                 } else {
                                     std::fs::remove_dir_all(&path)
                                 }
@@ -1888,8 +1886,11 @@ impl eframe::App for FreeDataDietApp {
         }
 
         // --- KEYBOARD SHORTCUTS POPUP ---
+        // Esc closes only the topmost dialog, so remember when the shortcuts sheet consumed it
+        let mut esc_consumed = false;
         if self.show_shortcuts_modal {
             let esc_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            esc_consumed = esc_pressed;
             let mut close_shortcuts = esc_pressed;
 
             let win_resp = egui::Window::new("Keyboard Shortcuts")
@@ -1936,7 +1937,8 @@ impl eframe::App for FreeDataDietApp {
 
                             add_sec(ui, "Navigation");
                             add_fixed(ui, "Up / Down", "Move selection through folder rows");
-                            add_fixed(ui, "Right / Enter", "Enter selected folder or launch file");
+                            add_fixed(ui, "Right", "Enter selected folder");
+                            add_fixed(ui, "Enter", "Enter selected folder or open selected file");
                             add_fixed(ui, "Left / Backspace", "Navigate up to parent directory");
                             add_fixed(ui, "Home / End", "Jump to first / last item in current folder");
                             add_fixed(ui, "PageUp / PageDown", "Scroll up / down by 15 items");
@@ -1944,7 +1946,7 @@ impl eframe::App for FreeDataDietApp {
                             add_sec(ui, "Quick Search");
                             add_toggle(ui, "F2", "Cycle search mode (Jump to Name vs Live Filter)", &mut self.config.shortcuts.f2_search_mode);
                             add_toggle(ui, "F3", "Activate Live Filter search bar", &mut self.config.shortcuts.f3_search_filter);
-                            add_fixed(ui, "A-Z, 0-9", "Jump to prefix (Explorer) or Live filter list (FilePilot)");
+                            add_fixed(ui, "A-Z, 0-9", "Jump to name (Explorer) or live filter the list (FilePilot)");
                             add_fixed(ui, "Esc", "Clear active search filter query or dismiss popup");
 
                             add_sec(ui, "File Operations");
@@ -1954,7 +1956,7 @@ impl eframe::App for FreeDataDietApp {
                             add_toggle(ui, "F5", "Refresh and rescan current directory", &mut self.config.shortcuts.f5_refresh);
 
                             add_sec(ui, "Preferences & View");
-                            add_fixed(ui, "F1", "Toggle this Keyboard Shortcuts cheat sheet (open / close)");
+                            add_fixed(ui, "F1 / ?", "Toggle this Keyboard Shortcuts cheat sheet (open / close)");
                             add_toggle(ui, "F11", "Toggle fullscreen mode", &mut self.config.shortcuts.f11_fullscreen);
                             add_toggle(ui, "F12", "Open Settings & Preferences dialog", &mut self.config.shortcuts.f12_settings);
                             add_toggle(ui, "Ctrl + ,", "Open Settings & Preferences dialog", &mut self.config.shortcuts.ctrl_comma_settings);
@@ -2005,7 +2007,7 @@ impl eframe::App for FreeDataDietApp {
 
         // --- SETTINGS MODAL ---
         if self.show_settings_modal {
-            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let mut close_settings = !esc_consumed && ui.input(|i| i.key_pressed(egui::Key::Escape));
             let mut trigger_rescan = false;
 
             let nav_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
@@ -2267,7 +2269,7 @@ impl eframe::App for FreeDataDietApp {
                     ui.add_space(8.0);
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Press Esc / F12 or click outside to return").weak().small());
+                        ui.label(RichText::new("Press Esc / F12 / Ctrl+, or click outside to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let resp_done = ui.button("Done (Esc / F12)");
                             if sel_idx == 17 {

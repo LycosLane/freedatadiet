@@ -21,14 +21,6 @@ impl DriveInfo {
     pub fn used_space(&self) -> u64 {
         self.total_space.saturating_sub(self.available_space)
     }
-
-    pub fn usage_ratio(&self) -> f32 {
-        if self.total_space == 0 {
-            0.0
-        } else {
-            (self.used_space() as f64 / self.total_space as f64).clamp(0.0, 1.0) as f32
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +80,8 @@ pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
             let attrs = meta.file_attributes();
             let is_hidden = (attrs & 0x0000_0002) != 0 || name.starts_with('.');
             let is_system = (attrs & 0x0000_0004) != 0 || is_sys_path;
-            let is_reparse = (attrs & 0x0000_0400) != 0;
+            // Only real links count: Windows also sets the reparse flag on cloud placeholders (OneDrive etc.)
+            let is_reparse = meta.file_type().is_symlink();
             return (is_system, is_hidden, is_reparse);
         }
     }
@@ -107,13 +100,15 @@ pub fn is_system_path(path: &Path) -> bool {
     let s = path.to_string_lossy().to_lowercase();
     #[cfg(windows)]
     {
-        s == "c:\\windows"
-            || s.starts_with("c:\\windows\\")
-            || s == "c:\\program files"
-            || s == "c:\\program files (x86)"
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()).to_lowercase();
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string()).to_lowercase();
+        let program_files_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string()).to_lowercase();
+        s == system_root
+            || s.starts_with(&format!("{}\\", system_root))
+            || s == program_files
+            || s == program_files_x86
             || s.contains("system volume information")
             || s.contains("documents and settings")
-            || s.ends_with("$recycle.bin")
             || s.contains("$recycle.bin")
             || s.ends_with("hiberfil.sys")
             || s.ends_with("pagefile.sys")
@@ -122,14 +117,11 @@ pub fn is_system_path(path: &Path) -> bool {
     }
     #[cfg(not(windows))]
     {
-        s == "/boot"
-            || s.starts_with("/boot/")
-            || s == "/etc"
-            || s.starts_with("/etc/")
-            || s == "/bin"
-            || s == "/sbin"
-            || s == "/usr/bin"
-            || s == "/System"
+        const ROOTS: [&str; 13] = [
+            "/boot", "/etc", "/bin", "/sbin", "/lib", "/usr/bin", "/usr/sbin", "/usr/lib", "/system", "/proc", "/sys",
+            "/dev", "/run",
+        ];
+        s == "/" || ROOTS.iter().any(|r| s == *r || s.starts_with(&format!("{}/", r)))
     }
 }
 
@@ -162,6 +154,10 @@ pub fn format_system_time(time: SystemTime) -> String {
 }
 
 pub fn format_epoch_secs(secs: u64) -> String {
+    // Corrupt timestamps (e.g. u64::MAX) would otherwise spin the year loop for ages on the UI thread
+    if secs > 253_402_300_799 {
+        return "-".to_string();
+    }
     let min = ((secs / 60) % 60) as u32;
     let hour = ((secs / 3600) % 24) as u32;
     let mut days = (secs / 86400) as i64;
