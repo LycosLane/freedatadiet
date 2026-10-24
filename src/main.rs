@@ -5,6 +5,7 @@ mod config;
 mod model;
 mod platform;
 mod scanner;
+pub mod updater;
 
 use app::FreeDataDietApp;
 

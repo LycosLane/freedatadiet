@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: LycosLane.FreeDataDiet
+PackageVersion: 1.1.5
+Platform:
+  - Windows.Desktop
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/LycosLane/freedatadiet/releases/download/v1.1.5/freedatadiet-v1.1.5-windows-x64.exe
+    InstallerSha256: B5616B40B131D2AE7A0F667385C63BFCA3ABA5B9877F4B4E43EBD13DEEBF8E6D
+    Commands:
+      - freedatadiet
+ManifestType: installer
+ManifestVersion: 1.6.0

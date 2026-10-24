@@ -27,17 +27,13 @@ jobs:
         shell: pwsh
         run: |
           $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.1.5" }
-          $zipName = "freedatadiet-${tag}-windows-x64.zip"
-          Compress-Archive -Path target\release\freedatadiet.exe, README.md, LICENSE -DestinationPath $zipName
           Copy-Item target\release\freedatadiet.exe -Destination "freedatadiet-${tag}-windows-x64.exe"
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
-          path: |
-            freedatadiet-*-windows-x64.zip
-            freedatadiet-*-windows-x64.exe
+          path: freedatadiet-*-windows-x64.exe
 
   # --- LINUX BUILD (Native ELF, Debian .deb, AppImage) ---
   build-linux:
@@ -59,15 +55,6 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
-
-      - name: Package Native ELF Tarball (.tar.gz)
-        run: |
-          TAG="${GITHUB_REF_NAME:-v1.1.5}"
-          TAR_DIR="freedatadiet-${TAG}-linux-x64"
-          mkdir -p "$TAR_DIR"
-          cp target/release/freedatadiet "$TAR_DIR/"
-          cp README.md LICENSE "$TAR_DIR/"
-          tar -czf "${TAR_DIR}.tar.gz" "$TAR_DIR"
 
       - name: Package Debian (.deb)
         run: |
@@ -110,7 +97,6 @@ jobs:
         with:
           name: linux-artifacts
           path: |
-            freedatadiet-*-linux-x64.tar.gz
             *.deb
             *.AppImage
 
@@ -185,16 +171,11 @@ jobs:
           DMG_NAME="FreeDataDiet-${TAG}-macos.dmg"
           hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_NAME}"
 
-          # Also package standalone tarball
-          tar -czf "freedatadiet-${TAG}-macos.tar.gz" -C "${MACOS}" "${APP_NAME}"
-
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
-          path: |
-            *.dmg
-            freedatadiet-*-macos.tar.gz
+          path: "*.dmg"
 
   # --- CREATE GITHUB RELEASE ---
   publish-release:
@@ -225,3 +206,86 @@ jobs:
         with:
           files: release_assets/*
           generate_release_notes: true
+
+  # --- UPDATE DEBIAN APT REPOSITORY (GITHUB PAGES) ---
+  publish-apt-repo:
+    needs: [publish-release, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Download Linux deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: linux_artifacts/
+
+      - name: Setup gh-pages directory structure
+        run: |
+          if [ ! -d "gh-pages" ]; then
+            mkdir -p gh-pages
+            cd gh-pages
+            git init -b gh-pages
+            git config user.name "LycosLane"
+            git config user.email "lycos.lane@gmail.com"
+            git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            cd ..
+          fi
+          mkdir -p gh-pages/pool/main
+          cp linux_artifacts/*.deb gh-pages/pool/main/
+          cp dist/apt/pubkey.gpg gh-pages/pubkey.gpg
+          cp dist/apt/index.html gh-pages/index.html
+
+      - name: Import GPG Private Key
+        env:
+          GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_KEY" | gpg --batch --import
+
+      - name: Build & Sign APT Repository
+        env:
+          APT_GPG_KEY_ID: ${{ vars.APT_GPG_KEY_ID }}
+        run: |
+          python3 dist/apt/build_repo.py gh-pages
+
+      - name: Push to gh-pages
+        run: |
+          cd gh-pages
+          git config user.name "LycosLane"
+          git config user.email "lycos.lane@gmail.com"
+          git add -A
+          git diff-index --quiet HEAD || git commit -m "chore(apt): release ${{ github.ref_name }} to APT repo"
+          git push -u origin gh-pages
+
+  # --- WINGET RELEASER ---
+  publish-winget:
+    needs: [publish-release]
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Submit to Windows Package Manager
+        uses: vedantmgoyal2009/winget-releaser@v2
+        if: env.HAS_TOKEN == 'true'
+        env:
+          HAS_TOKEN: ${{ secrets.WINGET_TOKEN != '' }}
+        with:
+          identifier: LycosLane.FreeDataDiet
+          version: ${{ github.ref_name }}
+          token: ${{ secrets.WINGET_TOKEN }}

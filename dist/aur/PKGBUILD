@@ -1,0 +1,17 @@
+# Maintainer: LycosLane <lycos.lane@gmail.com>
+pkgname=freedatadiet-bin
+pkgver=1.1.5
+pkgrel=1
+pkgdesc="FreeDataDiet - Put your storage on a diet. Lightning-fast disk usage analyzer."
+arch=('x86_64')
+url="https://github.com/LycosLane/freedatadiet"
+license=('MIT')
+depends=('libxkbcommon' 'mesa' 'fontconfig' 'wayland')
+provides=('freedatadiet')
+conflicts=('freedatadiet')
+source=("https://github.com/LycosLane/freedatadiet/releases/download/v${pkgver}/freedatadiet_${pkgver}-1_amd64.deb")
+sha256sums=('9fe9e58436b675710d2926632cae233deff91d0b824ca52dd83e625a1aa6a5ed')
+
+package() {
+    tar -xf data.tar.* -C "${pkgdir}/"
+}

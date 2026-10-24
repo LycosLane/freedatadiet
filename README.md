@@ -4,7 +4,7 @@
 > A fast, zero-bloat disk usage analyzer built in native Rust & egui.  
 > *Find what is eating your gigabytes without subscriptions, ads, or background services.*
 
-[![Version: 1.1.5](https://img.shields.io/badge/version-1.1.5-blue.svg)]()
+[![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
@@ -14,15 +14,17 @@
 
 ## Downloads & Installation
 
-Pre-compiled, zero-dependency release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page:
+Pre-compiled, zero-dependency release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page.
 
 ### Windows
-* **Portable ZIP (`freedatadiet-<version>-windows-x64.zip`):** Download, extract anywhere, and run `freedatadiet.exe`. Zero installer, completely self-contained.
-* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single-file executable ready to launch.
+* **Winget (Recommended):**
+  ```cmd
+  winget install freedatadiet
+  ```
+* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. Zero installer, double-click and run.
 
 ### Linux
 * **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS — Recommended):**  
-  Add the official signed repository to receive automatic updates alongside your system updates:
   ```bash
   # 1. Add GPG signing key
   curl -fsSL https://lycoslane.github.io/freedatadiet/pubkey.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/freedatadiet.gpg
@@ -33,17 +35,20 @@ Pre-compiled, zero-dependency release packages are published on the **[Releases]
   # 3. Install & automatically stay up to date
   sudo apt update && sudo apt install freedatadiet
   ```
-* **Direct Debian Package (`.deb`):** Install manually with `sudo apt install ./freedatadiet_*_amd64.deb` or `sudo dpkg -i freedatadiet_*_amd64.deb`.
-* **Universal AppImage (`FreeDataDiet-<version>-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution. Make executable (`chmod +x`) and run.
-* **Fast-Track Native Binary (`.tar.gz`):** Pure native ELF binary. Instant startup (<5ms) with zero container overhead. Extract and run `./freedatadiet` or move to `/usr/local/bin/`.
-* **Arch Linux (AUR):** Install via any AUR helper:
+* **Arch Linux (AUR):**
   ```bash
-  yay -S freedatadiet
+  yay -S freedatadiet-bin
   ```
+* **Universal AppImage (`FreeDataDiet-<version>-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution.
+* **Direct Debian Package (`.deb`):** `sudo apt install ./freedatadiet_*_amd64.deb`.
 
 ### macOS
 * **Apple Disk Image (`FreeDataDiet-<version>-macos.dmg`):** Open the `.dmg` and drag `FreeDataDiet.app` into your `Applications` folder.
-* **Standalone Tarball (`.tar.gz`):** Native standalone command-line / homebrew executable.
+
+---
+
+### In-App Update Checker
+FreeDataDiet includes a built-in update indicator. When a new version is released, a green **`⟳ Update`** icon appears in the top navigation bar. Clicking it allows 1-click download & restart for portable executables, or provides the quick update command for your package manager.
 
 ---
 

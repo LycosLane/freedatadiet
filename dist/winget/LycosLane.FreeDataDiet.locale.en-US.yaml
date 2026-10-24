@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: LycosLane.FreeDataDiet
+PackageVersion: 1.1.5
+PackageLocale: en-US
+Publisher: LycosLane
+PublisherUrl: https://github.com/LycosLane
+PublisherSupportUrl: https://github.com/LycosLane/freedatadiet/issues
+PackageName: FreeDataDiet
+PackageUrl: https://github.com/LycosLane/freedatadiet
+License: MIT
+LicenseUrl: https://github.com/LycosLane/freedatadiet/blob/main/LICENSE
+ShortDescription: FreeDataDiet - Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer.
+Description: |
+  FreeDataDiet is a lightning-fast, bloatware-free disk usage analyzer written in native Rust with egui graphics.
+  Quickly scan drives and directories to visualize storage consumption and clean up bloat with zero subscriptions.
+Tags:
+  - disk-usage
+  - storage
+  - disk-analyzer
+  - cleaner
+  - egui
+ReleaseNotesUrl: https://github.com/LycosLane/freedatadiet/releases/tag/v1.1.5
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

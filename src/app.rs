@@ -140,6 +140,8 @@ pub struct FreeDataDietApp {
     shortcuts_selected_idx: usize,
     status_toast: Option<(String, Instant)>,
     is_admin: bool,
+    updater: crate::updater::UpdateManager,
+    show_update_modal: bool,
 }
 
 impl FreeDataDietApp {
@@ -190,6 +192,8 @@ impl FreeDataDietApp {
             shortcuts_selected_idx: 0,
             status_toast: None,
             is_admin,
+            updater: crate::updater::UpdateManager::new(),
+            show_update_modal: false,
         };
 
         app.trigger_scan();
@@ -692,6 +696,37 @@ impl eframe::App for FreeDataDietApp {
                         if let Err(msg) = platform::restart_as_admin(Some(&self.current_path)) {
                             self.status_toast = Some((msg, Instant::now()));
                         }
+                    }
+
+                    // --- UPDATE BUTTON / INDICATOR ---
+                    match self.updater.status() {
+                        crate::updater::UpdateStatus::Available(ref update) => {
+                            let btn = egui::Button::new(
+                                RichText::new(format!("⟳ Update v{}", update.latest_version))
+                                    .color(Color32::from_rgb(60, 220, 120))
+                                    .strong(),
+                            );
+                            if ui.add(btn).on_hover_text("Update available! Click to review and update.").clicked() {
+                                self.show_update_modal = true;
+                            }
+                        }
+                        crate::updater::UpdateStatus::Downloading { progress_pct, ref message } => {
+                            let text = format!("⟳ Downloading ({:.0}%)...", progress_pct * 100.0);
+                            ui.label(RichText::new(text).color(Color32::from_rgb(255, 200, 80)).small())
+                                .on_hover_text(message);
+                        }
+                        crate::updater::UpdateStatus::DownloadedReadyToRestart { ref new_exe_path } => {
+                            let btn = egui::Button::new(
+                                RichText::new("🔄 Restart to Apply Update!")
+                                    .color(Color32::WHITE)
+                                    .background_color(Color32::from_rgb(40, 160, 80))
+                                    .strong(),
+                            );
+                            if ui.add(btn).clicked() {
+                                self.updater.restart_and_apply(new_exe_path.clone());
+                            }
+                        }
+                        _ => {}
                     }
                 });
             });
@@ -2373,6 +2408,82 @@ impl eframe::App for FreeDataDietApp {
             }
             if trigger_rescan {
                 self.trigger_scan();
+            }
+        }
+
+        // --- UPDATE MODAL ---
+        if self.show_update_modal {
+            let mut close_modal = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let status = self.updater.status();
+
+            if let crate::updater::UpdateStatus::Available(ref update) = status {
+                let win = egui::Window::new("FreeDataDiet Update Available")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .fixed_size(egui::vec2(500.0, 340.0));
+
+                let win_resp = win.show(ui.ctx(), |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.heading(format!("Version v{} is available!", update.latest_version));
+                        ui.label(RichText::new(format!("(current: v{})", update.current_version)).weak());
+                    });
+
+                    ui.separator();
+
+                    ui.label(RichText::new("What's New:").strong());
+                    ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                        if update.release_notes.trim().is_empty() {
+                            ui.label("Bug fixes and performance improvements.");
+                        } else {
+                            ui.label(&update.release_notes);
+                        }
+                    });
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        if update.download_url.is_some() {
+                            if ui.button(RichText::new("⟳ Download & Restart").strong().color(Color32::from_rgb(60, 220, 120))).clicked() {
+                                self.updater.start_download((**update).clone());
+                                close_modal = true;
+                            }
+                        }
+
+                        if ui.button("Open GitHub Release").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&update.release_url));
+                        }
+
+                        if ui.button("Close").clicked() {
+                            close_modal = true;
+                        }
+                    });
+
+                    ui.add_space(4.0);
+                    ui.collapsing("Package Manager update instructions", |ui| {
+                        ui.label("• Ubuntu/Debian:  sudo apt update && sudo apt install --only-upgrade freedatadiet");
+                        ui.label("• Arch Linux:     yay -S freedatadiet-bin");
+                        ui.label("• Windows Winget: winget upgrade freedatadiet");
+                    });
+                });
+
+                if let Some(resp) = win_resp {
+                    if ui.input(|i| i.pointer.any_pressed()) {
+                        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            if !resp.response.rect.contains(pos) {
+                                close_modal = true;
+                            }
+                        }
+                    }
+                }
+            } else {
+                close_modal = true;
+            }
+
+            if close_modal {
+                self.show_update_modal = false;
             }
         }
     }
