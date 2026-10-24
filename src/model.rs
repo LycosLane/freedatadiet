@@ -106,7 +106,9 @@ pub fn is_system_path(path: &Path) -> bool {
         s == system_root
             || s.starts_with(&format!("{}\\", system_root))
             || s == program_files
+            || s.starts_with(&format!("{}\\", program_files))
             || s == program_files_x86
+            || s.starts_with(&format!("{}\\", program_files_x86))
             || s.contains("system volume information")
             || s.contains("documents and settings")
             || s.contains("$recycle.bin")
@@ -117,12 +119,23 @@ pub fn is_system_path(path: &Path) -> bool {
     }
     #[cfg(not(windows))]
     {
-        const ROOTS: [&str; 13] = [
-            "/boot", "/etc", "/bin", "/sbin", "/lib", "/usr/bin", "/usr/sbin", "/usr/lib", "/system", "/proc", "/sys",
-            "/dev", "/run",
+        const ROOTS: [&str; 15] = [
+            "/boot", "/etc", "/bin", "/sbin", "/lib", "/usr", "/system", "/library", "/private", "/proc", "/sys",
+            "/dev", "/run", "/root", "/var",
         ];
         s == "/" || ROOTS.iter().any(|r| s == *r || s.starts_with(&format!("{}/", r)))
     }
+}
+
+pub fn is_root_or_system(path: &Path) -> bool {
+    if path.parent().is_none() {
+        return true;
+    }
+    let s = path.to_string_lossy();
+    if s == "/" || s == "\\" || (s.len() <= 3 && s.contains(':')) {
+        return true;
+    }
+    is_system_path(path)
 }
 
 pub fn format_size(bytes: u64) -> String {

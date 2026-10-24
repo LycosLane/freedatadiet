@@ -1790,10 +1790,10 @@ impl eframe::App for FreeDataDietApp {
             let modal_enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
             let modal_escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
-            // Permanent deletion is never offered for protected system paths or drive roots
-            let perm_blocked = is_system || path.parent().is_none();
-            if perm_blocked && self.modal_focus == DeleteModalFocus::Permanent {
-                self.modal_focus = if nav_prev { DeleteModalFocus::Trash } else { DeleteModalFocus::Cancel };
+            // Deletion is completely blocked for protected system paths or drive roots
+            let del_blocked = is_system || crate::model::is_root_or_system(&path);
+            if del_blocked {
+                self.modal_focus = DeleteModalFocus::Cancel;
             }
 
             if modal_escape {
@@ -1805,15 +1805,15 @@ impl eframe::App for FreeDataDietApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    if is_system {
-                        ui.label(RichText::new("[!] Protected system path: permanent deletion is disabled.").color(Color32::RED).strong());
+                    if del_blocked {
+                        ui.label(RichText::new("[!] Protected system path or drive root: deletion is disabled for safety.").color(Color32::RED).strong());
                         ui.add_space(4.0);
                     }
                     ui.label(RichText::new(format!("Do you want to delete \"{}\"?", name)).size(14.0));
                     ui.add_space(10.0);
 
                     ui.horizontal(|ui| {
-                        // 1. Move to Trash (default selection)
+                        // 1. Move to Trash (default selection when allowed)
                         let is_trash = self.modal_focus == DeleteModalFocus::Trash;
                         let trash_text = if is_trash {
                             RichText::new("> Move to Trash <").color(Color32::WHITE).strong()
@@ -1843,8 +1843,8 @@ impl eframe::App for FreeDataDietApp {
                         let cancel_btn = egui::Button::new(cancel_text)
                             .fill(if is_cancel { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
 
-                        let do_trash = ui.add(trash_btn).clicked() || (is_trash && modal_enter);
-                        let do_perm = ui.add_enabled(!perm_blocked, perm_btn).clicked() || (is_perm && modal_enter && !perm_blocked);
+                        let do_trash = ui.add_enabled(!del_blocked, trash_btn).clicked() || (is_trash && modal_enter && !del_blocked);
+                        let do_perm = ui.add_enabled(!del_blocked, perm_btn).clicked() || (is_perm && modal_enter && !del_blocked);
                         let do_cancel = ui.add(cancel_btn).clicked() || (is_cancel && modal_enter);
 
                         if do_trash {

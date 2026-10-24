@@ -211,7 +211,10 @@ mod win {
 
     pub fn restart_as_admin(current_path: Option<&Path>) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let params = current_path.map(|p| format!("\"{}\"", p.display()));
+        let params = current_path.map(|p| {
+            let clean = p.to_string_lossy().replace('"', "");
+            format!("\"{}\"", clean)
+        });
         // Only exit once the elevation prompt was accepted; cancelling keeps this instance alive.
         if shell_execute("runas", &exe, params.as_deref()) {
             std::process::exit(0);
@@ -411,9 +414,9 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
     {
         if path.is_file() {
             use std::os::windows::process::CommandExt;
-            // raw_arg keeps the quotes intact so paths with commas or spaces are selected correctly
+            let clean = path.to_string_lossy().replace('"', "");
             std::process::Command::new("explorer")
-                .raw_arg(format!("/select,\"{}\"", path.display()))
+                .raw_arg(format!("/select,\"{}\"", clean))
                 .spawn()?;
         } else {
             std::process::Command::new("explorer")
@@ -426,6 +429,7 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
     {
         std::process::Command::new("open")
             .arg("-R")
+            .arg("--")
             .arg(path)
             .spawn()?;
     }
@@ -438,6 +442,7 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
             path
         };
         std::process::Command::new("xdg-open")
+            .arg("--")
             .arg(target)
             .spawn()?;
     }
@@ -445,7 +450,25 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+fn is_executable_extension(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        matches!(
+            ext_lower.as_str(),
+            "exe" | "bat" | "cmd" | "com" | "msi" | "scr" | "pif" | "vbs" | "vbe" | "js" | "jse" | "wsf" | "wsh" | "ps1" | "app" | "bin" | "sh"
+        )
+    } else {
+        false
+    }
+}
+
 pub fn open_file(path: &Path) -> Result<(), std::io::Error> {
+    // Security safeguard: never execute arbitrary binaries or scripts directly from a storage analyzer tool.
+    // Instead, safely reveal them in the file manager so the user can inspect them.
+    if is_executable_extension(path) {
+        return open_in_file_manager(path);
+    }
+
     #[cfg(windows)]
     {
         win::open_file_win(path)?;
@@ -454,6 +477,7 @@ pub fn open_file(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
+            .arg("--")
             .arg(path)
             .spawn()?;
     }
@@ -461,6 +485,7 @@ pub fn open_file(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         std::process::Command::new("xdg-open")
+            .arg("--")
             .arg(path)
             .spawn()?;
     }

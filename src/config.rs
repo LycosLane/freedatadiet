@@ -308,7 +308,11 @@ impl AppConfig {
         // Write to a temp file and rename so a crash mid-write cannot leave a truncated config
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, &path)?;
+        if std::fs::rename(&tmp, &path).is_err() {
+            // Fallback for filesystem locking (e.g. Windows AV/file indexer holding handle)
+            std::fs::copy(&tmp, &path)?;
+            let _ = std::fs::remove_file(&tmp);
+        }
         Ok(())
     }
 }
