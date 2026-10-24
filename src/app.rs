@@ -2065,14 +2065,14 @@ impl eframe::App for FreeDataDietApp {
             let mut close_settings = !esc_consumed && ui.input(|i| i.key_pressed(egui::Key::Escape));
             let mut trigger_rescan = false;
 
-            let is_typing = ui.ctx().egui_wants_keyboard_input();
-            let nav_down = !is_typing && ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
-            let nav_up = !is_typing && ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
-            let nav_left = !is_typing && ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
-            let nav_right = !is_typing && ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let is_in_text_edit = self.settings_selected_idx == 15;
+            let nav_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+            let nav_up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+            let nav_left = !is_in_text_edit && ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let nav_right = !is_in_text_edit && ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
             let tab_forward = ui.input(|i| !i.modifiers.shift && i.key_pressed(egui::Key::Tab));
             let tab_backward = ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::Tab));
-            let activate = !is_typing && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+            let activate = !is_in_text_edit && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
 
             const TOTAL_SETTINGS_ITEMS: usize = 19;
             let mut key_navigated = false;
@@ -2159,6 +2159,7 @@ impl eframe::App for FreeDataDietApp {
                                 if resp.clicked() || (sel_idx == t_idx && activate) {
                                     self.config.theme = theme;
                                     self.save_config();
+                                    ui.ctx().request_repaint();
                                 }
                             }
                         });
@@ -2297,6 +2298,9 @@ impl eframe::App for FreeDataDietApp {
                                 .hint_text(".git, node_modules, target, .cache, .venv")
                         );
                         draw_focus(ui, &edit, 15);
+                        if edit.clicked() || edit.gained_focus() {
+                            self.settings_selected_idx = 15;
+                        }
                         if sel_idx == 15 && scroll_to_focus {
                             edit.request_focus();
                         }
