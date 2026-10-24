@@ -16,9 +16,10 @@ maintainer = "LycosLane <lycos.lane@gmail.com>"
 copyright = "2026, LycosLane <lycos.lane@gmail.com>"
 license-file = ["LICENSE", "4"]
 extended-description = """\
-FreeDataDiet is a lightning-fast, bloatware-free cross-platform disk usage \
+FreeDataDiet is a fast, lightweight cross-platform disk usage \
 analyzer written in native Rust with egui graphics. Quickly scan drives and \
-directories to visualize storage consumption and clean up bloat with zero subscriptions."""
+directories to visualize storage consumption and manage disk space without \
+subscriptions or ads."""
 depends = "$auto"
 section = "utils"
 priority = "optional"

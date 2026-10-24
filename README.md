@@ -1,8 +1,8 @@
 # FreeDataDiet
 
 > **Put your storage on a diet.**  
-> A fast, zero-bloat disk usage analyzer built in native Rust & egui.  
-> *Find what is eating your gigabytes without subscriptions, ads, or background services.*
+> A fast, lightweight disk usage analyzer built with Rust & egui.  
+> *Find what is eating your storage without subscriptions, ads, or background services.*
 
 [![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -14,14 +14,14 @@
 
 ## Downloads & Installation
 
-Pre-compiled, zero-dependency release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page.
+Pre-compiled, self-contained release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page.
 
 ### Windows
 * **Winget (Recommended):**
   ```cmd
   winget install freedatadiet
   ```
-* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. Zero installer, double-click and run.
+* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. No installer required—double-click and run.
 
 ### Linux
 * **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS — Recommended):**  
