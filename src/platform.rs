@@ -327,6 +327,85 @@ pub use win::*;
 #[cfg(not(windows))]
 pub use unix::*;
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FileId {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[cfg(windows)]
+pub fn get_file_id_and_links(path: &Path, meta: &std::fs::Metadata) -> (Option<FileId>, u32) {
+    if !meta.is_dir() {
+        // On Windows, inspecting hardlinks for every regular file requires opening
+        // a file handle (CreateFileW), which degrades directory scan throughput.
+        return (None, 1);
+    }
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let file = match std::fs::OpenOptions::new()
+        .access_mode(0x0080) // FILE_READ_ATTRIBUTES
+        .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(_) => return (None, 1),
+    };
+
+    #[repr(C)]
+    struct BY_HANDLE_FILE_INFORMATION {
+        dw_file_attributes: u32,
+        ft_creation_time: [u32; 2],
+        ft_last_access_time: [u32; 2],
+        ft_last_write_time: [u32; 2],
+        dw_volume_serial_number: u32,
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        n_number_of_links: u32,
+        n_file_index_high: u32,
+        n_file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            h_file: isize,
+            lp_file_information: *mut BY_HANDLE_FILE_INFORMATION,
+        ) -> i32;
+    }
+
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    let res = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle() as isize, info.as_mut_ptr())
+    };
+
+    if res != 0 {
+        let info = unsafe { info.assume_init() };
+        let file_index = ((info.n_file_index_high as u64) << 32) | (info.n_file_index_low as u64);
+        (
+            Some(FileId {
+                device: info.dw_volume_serial_number as u64,
+                inode: file_index,
+            }),
+            info.n_number_of_links,
+        )
+    } else {
+        (None, 1)
+    }
+}
+
+#[cfg(unix)]
+pub fn get_file_id_and_links(_path: &Path, meta: &std::fs::Metadata) -> (Option<FileId>, u32) {
+    use std::os::unix::fs::MetadataExt;
+    let links = meta.nlink() as u32;
+    (Some(FileId { device: meta.dev(), inode: meta.ino() }), links)
+}
+
+#[cfg(not(any(windows, unix)))]
+pub fn get_file_id_and_links(_path: &Path, _meta: &std::fs::Metadata) -> (Option<FileId>, u32) {
+    (None, 1)
+}
+
 pub fn open_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(windows)]
     {

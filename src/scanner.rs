@@ -1,13 +1,14 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::model::FileEntry;
-use crate::platform::get_allocated_size;
+use crate::platform::{get_allocated_size, get_file_id_and_links, FileId};
 
 #[derive(Debug, Clone)]
 pub struct ScanSummary {
@@ -61,6 +62,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
         };
 
         // Collect direct children and send immediate initial snapshot
+        let seen_hardlinks: Arc<Mutex<HashSet<FileId>>> = Arc::new(Mutex::new(HashSet::new()));
         let mut child_paths = Vec::new();
         let mut initial_entries = Vec::new();
         let mut total_size = 0u64;
@@ -81,10 +83,27 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
                 let (size, allocated, is_scanning) = if !is_dir {
                     let s = meta_opt.as_ref().map(|m| m.len()).unwrap_or(0);
                     let a = get_allocated_size(&path, s);
-                    total_size += s;
-                    total_allocated += a;
+                    let is_dup = if let Some(m) = &meta_opt {
+                        let (fid_opt, links) = get_file_id_and_links(&path, m);
+                        if links > 1 {
+                            if let Some(fid) = fid_opt {
+                                !seen_hardlinks.lock().unwrap().insert(fid)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !is_dup {
+                        total_size += s;
+                        total_allocated += a;
+                    }
                     total_files += 1;
-                    (s, a, false)
+                    (if is_dup { 0 } else { s }, if is_dup { 0 } else { a }, false)
                 } else {
                     (0, 0, true)
                 };
@@ -127,6 +146,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
             let cancel = Arc::clone(&cancel_clone);
             let total_counter = Arc::clone(&total_counter);
             let excludes = Arc::clone(&excludes);
+            let seen_hardlinks = Arc::clone(&seen_hardlinks);
             let worker_tx = worker_tx.clone();
 
             let start = chunk_idx * chunk_size;
@@ -142,7 +162,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
                         break;
                     }
                     let (path, name) = &child_paths[i];
-                    let entry = process_single_entry(path, name, &cancel, &total_counter, &excludes);
+                    let entry = process_single_entry(path, name, &cancel, &total_counter, &excludes, &seen_hardlinks);
                     let _ = worker_tx.send(entry);
                 }
             });
@@ -221,6 +241,7 @@ fn process_single_entry(
     cancel: &Arc<AtomicBool>,
     total_counter: &Arc<AtomicUsize>,
     excludes: &[String],
+    seen_hardlinks: &Arc<Mutex<HashSet<FileId>>>,
 ) -> FileEntry {
     total_counter.fetch_add(1, Ordering::Relaxed);
 
@@ -246,12 +267,23 @@ fn process_single_entry(
 
     if !is_dir {
         let size = metadata.len();
-        let allocated = get_allocated_size(path, size);
+        let (fid_opt, links) = get_file_id_and_links(path, &metadata);
+        let is_dup = if links > 1 {
+            if let Some(fid) = fid_opt {
+                !seen_hardlinks.lock().unwrap().insert(fid)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let counted_size = if is_dup { 0 } else { size };
+        let allocated = if is_dup { 0 } else { get_allocated_size(path, size) };
         FileEntry::new(
             name.to_string(),
             path.to_path_buf(),
             false,
-            size,
+            counted_size,
             allocated,
             modified,
             1,
@@ -297,6 +329,11 @@ fn process_single_entry(
         let mut access_denied = false;
         let mut partially_locked = false;
 
+        let mut visited_dirs = HashSet::new();
+        if let (Some(root_fid), _) = get_file_id_and_links(path, &metadata) {
+            visited_dirs.insert(root_fid);
+        }
+
         let mut stack = vec![path.to_path_buf()];
 
         while let Some(current_dir) = stack.pop() {
@@ -328,11 +365,31 @@ fn process_single_entry(
                                     if meta.file_type().is_symlink() {
                                         continue;
                                     }
+                                    // Track directory inode to prevent infinite loops (Unix bind mounts or recursive mounts)
+                                    let (dir_fid, _) = get_file_id_and_links(&sub_path, &meta);
+                                    if let Some(dfid) = dir_fid {
+                                        if !visited_dirs.insert(dfid) {
+                                            continue;
+                                        }
+                                    }
                                     stack.push(sub_path);
                                 } else {
                                     let fsize = meta.len();
-                                    dir_size += fsize;
-                                    dir_allocated += get_allocated_size(&sub_path, fsize);
+                                    let (file_fid, links) = get_file_id_and_links(&sub_path, &meta);
+                                    let is_dup = if links > 1 {
+                                        if let Some(ffid) = file_fid {
+                                            !seen_hardlinks.lock().unwrap().insert(ffid)
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
+
+                                    if !is_dup {
+                                        dir_size += fsize;
+                                        dir_allocated += get_allocated_size(&sub_path, fsize);
+                                    }
                                 }
                             }
                         }

@@ -1,7 +1,7 @@
 # Maintainer: LycosLane <lycos.lane@gmail.com>
 _pkgname=FreeDataDiet
 pkgname=freedatadiet
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer."
 arch=('x86_64' 'aarch64')
