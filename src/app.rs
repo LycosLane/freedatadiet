@@ -586,10 +586,17 @@ impl eframe::App for FreeDataDietApp {
                     QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
                     _ => QuickSearchMode::JumpToPrefix,
                 };
+                let mode_str = match self.config.quick_search_mode {
+                    QuickSearchMode::LiveFilter => "Quick Search: Live Filter",
+                    QuickSearchMode::JumpToPrefix => "Quick Search: Jump to First Letter",
+                    QuickSearchMode::Disabled => "Quick Search: Disabled",
+                };
+                self.status_toast = Some((mode_str.to_string(), Instant::now()));
                 self.quick_search_buffer.clear();
                 self.save_config();
             } else if self.config.shortcuts.f3_search_filter && f3_pressed {
                 self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                self.status_toast = Some(("Quick Search: Live Filter".to_string(), Instant::now()));
                 self.save_config();
             } else if self.config.shortcuts.ctrl_shift_h_system && ctrl && shift && h_pressed {
                 self.config.show_system_files = !self.config.show_system_files;
@@ -1043,7 +1050,6 @@ impl eframe::App for FreeDataDietApp {
             let mut open_context_menu: Option<ActiveContextMenu> = None;
             let mut do_navigate_up = false;
             let mut do_trigger_rescan = false;
-            let mut do_cycle_search_mode = false;
 
             let visible_entries: Vec<(usize, &FileEntry)> = self.entries
                 .iter()
@@ -1300,42 +1306,17 @@ impl eframe::App for FreeDataDietApp {
             let mut clear_search_buffer = false;
             let matches_count = visible_entries.len();
 
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                let (mode_badge, mode_color, mode_tip) = match self.config.quick_search_mode {
-                    QuickSearchMode::LiveFilter => ("[Live Filter (F2)]", Color32::from_rgb(100, 200, 255), "Filter as you type. Click or press F2 to cycle mode."),
-                    QuickSearchMode::JumpToPrefix => ("[Jump to Name (F2)]", Color32::from_rgb(255, 200, 100), "Jump to item on keypress (Explorer style). Click or press F2 to cycle mode."),
-                    QuickSearchMode::Disabled => ("[Search: Disabled (F2)]", Color32::GRAY, "Keyboard search disabled. Click or press F2 to cycle mode."),
-                };
-                if ui.button(RichText::new(mode_badge).small().color(mode_color)).on_hover_text(mode_tip).clicked() {
-                    do_cycle_search_mode = true;
-                }
-
-                match self.config.quick_search_mode {
-                    QuickSearchMode::LiveFilter => {
-                        if self.quick_search_buffer.is_empty() {
-                            ui.label(RichText::new("Type any letters to filter current view...").weak().small());
-                        } else {
-                            ui.label(RichText::new("Filter:").color(Color32::from_rgb(255, 200, 100)).strong().small());
-                            ui.label(RichText::new(format!("\"{}\"", self.quick_search_buffer)).color(Color32::WHITE).strong().small());
-                            ui.label(RichText::new(format!("({} matches)", matches_count)).weak().small());
-                            if ui.button("Clear (Esc)").clicked() {
-                                clear_search_buffer = true;
-                            }
-                        }
+            if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Filter:").color(if is_dark { Color32::from_rgb(255, 200, 100) } else { Color32::from_rgb(200, 110, 0) }).strong().small());
+                    ui.label(RichText::new(format!("\"{}\"", self.quick_search_buffer)).strong().small());
+                    ui.label(RichText::new(format!("({} matches)", matches_count)).weak().small());
+                    if ui.button("Clear (Esc)").clicked() {
+                        clear_search_buffer = true;
                     }
-                    QuickSearchMode::JumpToPrefix => {
-                        if self.quick_search_buffer.is_empty() {
-                            ui.label(RichText::new("Type first letter to jump directly to item...").weak().small());
-                        } else {
-                            ui.label(RichText::new(format!("Jumped to: \"{}\"", self.quick_search_buffer)).color(Color32::from_rgb(255, 200, 100)).small());
-                        }
-                    }
-                    QuickSearchMode::Disabled => {
-                        ui.label(RichText::new("Press F2 or click to enable quick search").weak().small());
-                    }
-                }
-            });
+                });
+            }
 
             if clear_search_buffer {
                 self.quick_search_buffer.clear();
@@ -1569,15 +1550,6 @@ impl eframe::App for FreeDataDietApp {
             }
             if do_trigger_rescan {
                 self.trigger_scan();
-            }
-            if do_cycle_search_mode {
-                self.config.quick_search_mode = match self.config.quick_search_mode {
-                    QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
-                    QuickSearchMode::LiveFilter => QuickSearchMode::Disabled,
-                    QuickSearchMode::Disabled => QuickSearchMode::JumpToPrefix,
-                };
-                self.quick_search_buffer.clear();
-                self.save_config();
             }
         });
 
