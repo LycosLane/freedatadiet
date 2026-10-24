@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e222b"/>
+      <stop offset="100%" stop-color="#0f1115"/>
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#64c8ff"/>
+      <stop offset="100%" stop-color="#007acc"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffb347"/>
+      <stop offset="100%" stop-color="#ff7b00"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#bg)" stroke="#2d3340" stroke-width="4"/>
+
+  <!-- Outer Disk Storage Ring Track -->
+  <circle cx="128" cy="128" r="82" fill="none" stroke="#252b36" stroke-width="14"/>
+
+  <!-- Active Usage Segment (Cyan - Lean fast data) -->
+  <circle cx="128" cy="128" r="82" fill="none" stroke="url(#cyanGrad)" stroke-width="14"
+          stroke-dasharray="360 515" stroke-dashoffset="130" stroke-linecap="round"/>
+
+  <!-- Trimming Highlight Segment (Amber - Diet / Trimmed bloat) -->
+  <circle cx="128" cy="128" r="82" fill="none" stroke="url(#amberGrad)" stroke-width="14"
+          stroke-dasharray="90 515" stroke-dashoffset="-240" stroke-linecap="round"/>
+
+  <!-- Center Disk Hub -->
+  <circle cx="128" cy="128" r="44" fill="#181c24" stroke="#373e4d" stroke-width="4"/>
+  <circle cx="128" cy="128" r="16" fill="url(#cyanGrad)"/>
+
+  <!-- Center Lightning Bolt (Fast & Lean) -->
+  <path d="M132 104 L118 126 L127 126 L124 152 L140 128 L130 128 Z" fill="#ffffff" opacity="0.95"/>
+</svg>

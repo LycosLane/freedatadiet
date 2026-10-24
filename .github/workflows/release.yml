@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # --- WINDOWS BUILD ---
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package Windows portable release
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.0.0" }
+          $zipName = "freedatadiet-${tag}-windows-x64.zip"
+          Compress-Archive -Path target\release\freedatadiet.exe, README.md, LICENSE -DestinationPath $zipName
+          Copy-Item target\release\freedatadiet.exe -Destination "freedatadiet-${tag}-windows-x64.exe"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            freedatadiet-*-windows-x64.zip
+            freedatadiet-*-windows-x64.exe
+
+  # --- LINUX BUILD (Native ELF, Debian .deb, AppImage) ---
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libgl1-mesa-dev libfontconfig1-dev file
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package Native ELF Tarball (.tar.gz)
+        run: |
+          TAG="${GITHUB_REF_NAME:-v1.0.0}"
+          TAR_DIR="freedatadiet-${TAG}-linux-x64"
+          mkdir -p "$TAR_DIR"
+          cp target/release/freedatadiet "$TAR_DIR/"
+          cp README.md LICENSE "$TAR_DIR/"
+          tar -czf "${TAR_DIR}.tar.gz" "$TAR_DIR"
+
+      - name: Package Debian (.deb)
+        run: |
+          cargo deb --no-build
+          cp target/debian/*.deb ./
+
+      - name: Package AppImage
+        run: |
+          TAG="${GITHUB_REF_NAME:-v1.0.0}"
+          APPDIR="AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          mkdir -p "$APPDIR/usr/share/applications"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+
+          cp target/release/freedatadiet "$APPDIR/usr/bin/"
+          cp assets/freedatadiet.desktop "$APPDIR/usr/share/applications/"
+          cp assets/freedatadiet.desktop "$APPDIR/"
+          cp assets/icons/freedatadiet.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
+          cp assets/icons/freedatadiet.svg "$APPDIR/freedatadiet.svg"
+          ln -s freedatadiet.svg "$APPDIR/.DirIcon"
+
+          # Create AppRun launcher
+          cat << 'EOF' > "$APPDIR/AppRun"
+          #!/bin/sh
+          SELF=$(readlink -f "$0")
+          HERE=${SELF%/*}
+          export PATH="${HERE}/usr/bin:${PATH}"
+          exec "${HERE}/usr/bin/freedatadiet" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          # Download appimagetool
+          wget -q -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+          ARCH=x86_64 ./squashfs-root/AppRun "$APPDIR" "FreeDataDiet-${TAG}-x86_64.AppImage"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            freedatadiet-*-linux-x64.tar.gz
+            *.deb
+            *.AppImage
+
+  # --- MACOS BUILD (Native .app & .dmg) ---
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package macOS .app and .dmg
+        run: |
+          TAG="${GITHUB_REF_NAME:-v1.0.0}"
+          APP_NAME="FreeDataDiet"
+          APP_BUNDLE="${APP_NAME}.app"
+          CONTENTS="${APP_BUNDLE}/Contents"
+          MACOS="${CONTENTS}/MacOS"
+          RESOURCES="${CONTENTS}/Resources"
+
+          mkdir -p "${MACOS}" "${RESOURCES}"
+          cp target/release/freedatadiet "${MACOS}/${APP_NAME}"
+          chmod +x "${MACOS}/${APP_NAME}"
+
+          # Create Info.plist
+          cat << EOF > "${CONTENTS}/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.lycoslane.freedatadiet</string>
+              <key>CFBundleName</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${TAG#v}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Create DMG staging directory with Applications shortcut
+          DMG_STAGING="dmg_staging"
+          mkdir -p "${DMG_STAGING}"
+          cp -r "${APP_BUNDLE}" "${DMG_STAGING}/"
+          ln -s /Applications "${DMG_STAGING}/Applications"
+
+          # Build DMG
+          DMG_NAME="FreeDataDiet-${TAG}-macos.dmg"
+          hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_NAME}"
+
+          # Also package standalone tarball
+          tar -czf "freedatadiet-${TAG}-macos.tar.gz" -C "${MACOS}" "${APP_NAME}"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            *.dmg
+            freedatadiet-*-macos.tar.gz
+
+  # --- CREATE GITHUB RELEASE ---
+  publish-release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts
+          path: release_assets/
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: release_assets/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-artifacts
+          path: release_assets/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          generate_release_notes: true

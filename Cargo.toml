@@ -1,11 +1,33 @@
 [package]
 name = "freedatadiet"
-version = "0.5.9"
+version = "1.0.0"
 edition = "2024"
 authors = ["LycosLane <lycos.lane@gmail.com>"]
 description = "FreeDataDiet - Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer."
 license = "MIT"
 repository = "https://github.com/LycosLane/FreeDataDiet"
+homepage = "https://github.com/LycosLane/FreeDataDiet"
+readme = "README.md"
+keywords = ["disk-usage", "analyzer", "storage", "egui", "cleaner"]
+categories = ["filesystem", "gui", "command-line-utilities"]
+
+[package.metadata.deb]
+maintainer = "LycosLane <lycos.lane@gmail.com>"
+copyright = "2026, LycosLane <lycos.lane@gmail.com>"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+FreeDataDiet is a lightning-fast, bloatware-free cross-platform disk usage \
+analyzer written in native Rust with egui graphics. Quickly scan drives and \
+directories to visualize storage consumption and clean up bloat with zero subscriptions."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/freedatadiet", "usr/bin/", "755"],
+    ["assets/freedatadiet.desktop", "usr/share/applications/", "644"],
+    ["assets/icons/freedatadiet.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/freedatadiet/README.md", "644"],
+]
 
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }

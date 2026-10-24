@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=FreeDataDiet
+GenericName=Disk Usage Analyzer
+Comment=Put your storage on a diet. Lightning-fast minimalist disk usage analyzer.
+Exec=freedatadiet %U
+Icon=freedatadiet
+Terminal=false
+Type=Application
+Categories=Utility;System;Filesystem;
+Keywords=disk;space;analyzer;storage;cleaner;diet;usage;
+StartupWMClass=freedatadiet
