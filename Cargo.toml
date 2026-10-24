@@ -1,6 +1,6 @@
 [package]
 name = "freedatadiet"
-version = "1.1.4"
+version = "1.1.5"
 edition = "2024"
 authors = ["LycosLane <lycos.lane@gmail.com>"]
 description = "FreeDataDiet - Put your storage on a diet. A minimalist, lightning-fast cross-platform disk usage analyzer."

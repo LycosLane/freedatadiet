@@ -4,7 +4,7 @@
 > A fast, zero-bloat disk usage analyzer built in native Rust & egui.  
 > *Find what is eating your gigabytes without subscriptions, ads, or background services.*
 
-[![Version: 1.1.4](https://img.shields.io/badge/version-1.1.4-blue.svg)]()
+[![Version: 1.1.5](https://img.shields.io/badge/version-1.1.5-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
