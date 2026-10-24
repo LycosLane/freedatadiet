@@ -18,8 +18,8 @@ license-file = ["LICENSE", "4"]
 extended-description = """\
 FreeDataDiet is a fast, lightweight cross-platform disk usage \
 analyzer written in native Rust with egui graphics. Quickly scan drives and \
-directories to visualize storage consumption and manage disk space without \
-subscriptions or ads."""
+directories to visualize storage consumption and manage disk space with \
+no installer required and no subscriptions."""
 depends = "$auto"
 section = "utils"
 priority = "optional"

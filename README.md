@@ -2,7 +2,7 @@
 
 > **Put your storage on a diet.**  
 > A fast, lightweight disk usage analyzer built with Rust & egui.  
-> *Find what is eating your storage without subscriptions, ads, or background services.*
+> *Find what is eating your storage with no installer required and no subscriptions.*
 
 [![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -59,7 +59,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 **FreeDataDiet** is built on a simpler philosophy:
 1. **Free & Open Source:** No paywalls, no subscriptions, and no telemetry.
 2. **Fast & Parallel:** Multi-threaded directory traversal scans hundreds of thousands of files in seconds.
-3. **Portable Single Binary:** Runs directly without installers, background services, or webview bloat.
+3. **Portable Single Binary:** Runs directly with no installer required, no background services, and no webviews.
 4. **Developer Cache Filter:** Skip `.git`, `node_modules`, `target`, `.cache`, and `.venv` to focus on cleanable user data.
 5. **Apparent Size & Size on Disk:** Displays both nominal file size and actual cluster allocation on disk.
 6. **System Protection:** Visual badges and warnings protect system-critical directories (`C:\Windows`, `/boot`).
