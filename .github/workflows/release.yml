@@ -26,7 +26,7 @@ jobs:
       - name: Package Windows portable release
         shell: pwsh
         run: |
-          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.1.0" }
+          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.1.2" }
           $zipName = "freedatadiet-${tag}-windows-x64.zip"
           Compress-Archive -Path target\release\freedatadiet.exe, README.md, LICENSE -DestinationPath $zipName
           Copy-Item target\release\freedatadiet.exe -Destination "freedatadiet-${tag}-windows-x64.exe"
@@ -62,7 +62,7 @@ jobs:
 
       - name: Package Native ELF Tarball (.tar.gz)
         run: |
-          TAG="${GITHUB_REF_NAME:-v1.1.0}"
+          TAG="${GITHUB_REF_NAME:-v1.1.2}"
           TAR_DIR="freedatadiet-${TAG}-linux-x64"
           mkdir -p "$TAR_DIR"
           cp target/release/freedatadiet "$TAR_DIR/"
@@ -76,7 +76,7 @@ jobs:
 
       - name: Package AppImage
         run: |
-          TAG="${GITHUB_REF_NAME:-v1.1.0}"
+          TAG="${GITHUB_REF_NAME:-v1.1.2}"
           APPDIR="AppDir"
           mkdir -p "$APPDIR/usr/bin"
           mkdir -p "$APPDIR/usr/share/applications"
@@ -137,7 +137,7 @@ jobs:
 
       - name: Package macOS .app and .dmg
         run: |
-          TAG="${GITHUB_REF_NAME:-v1.1.0}"
+          TAG="${GITHUB_REF_NAME:-v1.1.2}"
           APP_NAME="FreeDataDiet"
           APP_BUNDLE="${APP_NAME}.app"
           CONTENTS="${APP_BUNDLE}/Contents"
