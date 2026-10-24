@@ -2005,8 +2005,7 @@ impl eframe::App for FreeDataDietApp {
 
         // --- SETTINGS MODAL ---
         if self.show_settings_modal {
-            let f12_pressed = self.config.shortcuts.f12_settings && ui.input(|i| i.key_pressed(egui::Key::F12));
-            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape)) || f12_pressed;
+            let mut close_settings = ui.input(|i| i.key_pressed(egui::Key::Escape));
             let mut trigger_rescan = false;
 
             let nav_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
