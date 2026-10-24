@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FreeDataDiet — Official APT Repository</title>
+  <meta name="description" content="Put your storage on a diet. Fast, zero-bloat disk usage analyzer built in native Rust & egui.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%233b82f6'/><text x='50' y='65' font-size='42' font-weight='bold' fill='white' text-anchor='middle'>FD</text></svg>">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --accent: #58a6ff;
+      --accent-hover: #79c0ff;
+      --code-bg: #090d13;
+      --success: #3fb950;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fa;
+        --card-bg: #ffffff;
+        --border: #d0d7de;
+        --text: #24292f;
+        --text-bright: #1f2328;
+        --accent: #0969da;
+        --accent-hover: #218bff;
+        --code-bg: #f6f8fa;
+        --success: #1a7f37;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 780px;
+      width: 100%;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    h1 {
+      color: var(--text-bright);
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .tagline {
+      font-size: 1.15rem;
+      color: var(--accent);
+      margin-top: 6px;
+      font-weight: 500;
+    }
+    .desc {
+      margin-top: 10px;
+      color: var(--text);
+      font-size: 0.98rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    h2 {
+      font-size: 1.25rem;
+      color: var(--text-bright);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step {
+      margin-bottom: 20px;
+    }
+    .step-label {
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 6px;
+      font-size: 0.95rem;
+    }
+    .code-box {
+      position: relative;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      padding-right: 50px;
+      overflow-x: auto;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9rem;
+      color: var(--text-bright);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .copy-btn.copied {
+      border-color: var(--success);
+      color: var(--success);
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 20px;
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      margin-right: 6px;
+    }
+    footer {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text);
+      margin-top: 32px;
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>FreeDataDiet</h1>
+      <div class="tagline">Put your storage on a diet.</div>
+      <p class="desc">A fast, zero-bloat disk usage analyzer built in native Rust & egui. Zero telemetry, zero webviews, zero ads.</p>
+    </header>
+
+    <div class="card">
+      <h2><span class="badge">APT</span> Debian / Ubuntu / Mint / Pop!_OS Installation</h2>
+      <p style="margin-bottom: 18px; font-size: 0.92rem;">
+        Add the official signed repository to receive automatic updates alongside your system updates.
+      </p>
+
+      <div class="step">
+        <div class="step-label">1. Install GPG signing key:</div>
+        <div class="code-box">
+          <code id="c1">curl -fsSL https://lycoslane.github.io/freedatadiet/pubkey.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/freedatadiet.gpg</code>
+          <button class="copy-btn" onclick="copyCode('c1', this)">Copy</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-label">2. Add the APT repository:</div>
+        <div class="code-box">
+          <code id="c2">echo "deb [signed-by=/etc/apt/keyrings/freedatadiet.gpg] https://lycoslane.github.io/freedatadiet stable main" | sudo tee /etc/apt/sources.list.d/freedatadiet.list</code>
+          <button class="copy-btn" onclick="copyCode('c2', this)">Copy</button>
+        </div>
+      </div>
+
+      <div class="step" style="margin-bottom: 0;">
+        <div class="step-label">3. Update and install FreeDataDiet:</div>
+        <div class="code-box">
+          <code id="c3">sudo apt update && sudo apt install freedatadiet</code>
+          <button class="copy-btn" onclick="copyCode('c3', this)">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="text-align: center;">
+      <h2 style="justify-content: center;">Source & Other Platforms</h2>
+      <p style="font-size: 0.92rem; margin-bottom: 14px;">
+        Also available as standalone AppImage, Arch Linux PKGBUILD, Windows portable ZIP/EXE, and macOS DMG.
+      </p>
+      <a href="https://github.com/LycosLane/freedatadiet" style="color: var(--accent); font-weight: 600; text-decoration: none; margin-right: 16px;">GitHub Repository &rarr;</a>
+      <a href="https://github.com/LycosLane/freedatadiet/releases" style="color: var(--accent); font-weight: 600; text-decoration: none;">Download All Releases &rarr;</a>
+    </div>
+
+    <footer>
+      FreeDataDiet &copy; 2026 LycosLane. Open source under the MIT License.
+    </footer>
+  </div>
+
+  <script>
+    function copyCode(id, btn) {
+      const text = document.getElementById(id).innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.innerText;
+        btn.innerText = "Copied!";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.innerText = orig;
+          btn.classList.remove("copied");
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>

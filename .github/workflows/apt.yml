@@ -1,0 +1,91 @@
+name: Publish APT Repository
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (leave blank for latest)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  update-apt-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Initialize gh-pages if not present
+        run: |
+          if [ ! -d "gh-pages" ]; then
+            echo "Creating initial gh-pages directory..."
+            mkdir gh-pages
+            cd gh-pages
+            git init -b gh-pages
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            cd ..
+          fi
+
+      - name: Download .deb package from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          mkdir -p deb_download
+          if [ -n "$TAG_INPUT" ]; then
+            echo "Downloading .deb for specified tag: $TAG_INPUT"
+            gh release download "$TAG_INPUT" --pattern "*.deb" --dir deb_download --repo "${{ github.repository }}"
+          else
+            echo "Downloading .deb from latest release"
+            gh release download --pattern "*.deb" --dir deb_download --repo "${{ github.repository }}"
+          fi
+          
+          mkdir -p gh-pages/pool/main
+          cp deb_download/*.deb gh-pages/pool/main/
+          echo "Current packages in pool:"
+          ls -la gh-pages/pool/main/
+
+      - name: Import GPG Key
+        env:
+          GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_KEY" | gpg --batch --import
+
+      - name: Copy static files (pubkey and index.html)
+        run: |
+          cp dist/apt/pubkey.gpg gh-pages/pubkey.gpg
+          cp dist/apt/index.html gh-pages/index.html
+
+      - name: Build and Sign APT repository
+        env:
+          APT_GPG_KEY_ID: ${{ vars.APT_GPG_KEY_ID }}
+        run: |
+          python3 dist/apt/build_repo.py gh-pages
+
+      - name: Commit and Push to gh-pages
+        run: |
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff-index --quiet HEAD || git commit -m "chore(apt): update APT repository"
+          git push -u origin gh-pages

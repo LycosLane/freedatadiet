@@ -21,13 +21,25 @@ Pre-compiled, zero-dependency release packages are published on the **[Releases]
 * **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single-file executable ready to launch.
 
 ### Linux
+* **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS — Recommended):**  
+  Add the official signed repository to receive automatic updates alongside your system updates:
+  ```bash
+  # 1. Add GPG signing key
+  curl -fsSL https://lycoslane.github.io/freedatadiet/pubkey.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/freedatadiet.gpg
+
+  # 2. Add repository source
+  echo "deb [signed-by=/etc/apt/keyrings/freedatadiet.gpg] https://lycoslane.github.io/freedatadiet stable main" | sudo tee /etc/apt/sources.list.d/freedatadiet.list
+
+  # 3. Install & automatically stay up to date
+  sudo apt update && sudo apt install freedatadiet
+  ```
+* **Direct Debian Package (`.deb`):** Install manually with `sudo apt install ./freedatadiet_*_amd64.deb` or `sudo dpkg -i freedatadiet_*_amd64.deb`.
+* **Universal AppImage (`FreeDataDiet-<version>-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution. Make executable (`chmod +x`) and run.
 * **Fast-Track Native Binary (`.tar.gz`):** Pure native ELF binary. Instant startup (<5ms) with zero container overhead. Extract and run `./freedatadiet` or move to `/usr/local/bin/`.
-* **Debian / Ubuntu / Mint / Pop!_OS (`.deb`):** Install natively with `sudo dpkg -i freedatadiet_*_amd64.deb` or `sudo apt install ./freedatadiet_*_amd64.deb`.
 * **Arch Linux (AUR):** Install via any AUR helper:
   ```bash
   yay -S freedatadiet
   ```
-* **AppImage (`FreeDataDiet-<version>-x86_64.AppImage`):** Single-file standalone executable for any Linux distribution. Make executable (`chmod +x`) and run.
 
 ### macOS
 * **Apple Disk Image (`FreeDataDiet-<version>-macos.dmg`):** Open the `.dmg` and drag `FreeDataDiet.app` into your `Applications` folder.
