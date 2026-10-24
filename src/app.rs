@@ -114,6 +114,7 @@ pub struct FreeDataDietApp {
     // Quick Search
     quick_search_buffer: String,
     quick_search_time: Option<Instant>,
+    filter_bar_active: bool,
 
     // Exclude filters
     ignore_dev_caches: bool,
@@ -176,6 +177,7 @@ impl FreeDataDietApp {
             selected_path: None,
             quick_search_buffer: String::new(),
             quick_search_time: None,
+            filter_bar_active: false,
             scanner: None,
             is_scanning: false,
             scanned_counter: 0,
@@ -245,6 +247,7 @@ impl FreeDataDietApp {
         if path.is_dir() {
             self.quick_search_buffer.clear();
             self.quick_search_time = None;
+            self.filter_bar_active = false;
             self.current_path = path;
             self.save_config();
             self.trigger_scan();
@@ -558,6 +561,43 @@ impl eframe::App for FreeDataDietApp {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fs));
         }
 
+        // Global F12 & Ctrl+, for Settings dialog (always toggleable)
+        let f12_pressed = ui.input(|i| i.key_pressed(egui::Key::F12));
+        let ctrl_comma_pressed = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Comma));
+        if (self.config.shortcuts.f12_settings && f12_pressed)
+            || (self.config.shortcuts.ctrl_comma_settings && ctrl_comma_pressed)
+        {
+            self.show_settings_modal = !self.show_settings_modal;
+            self.settings_just_opened = self.show_settings_modal;
+        }
+
+        // Global F5 shortcut for Refresh
+        let f5_pressed = ui.input(|i| i.key_pressed(egui::Key::F5));
+        if self.config.shortcuts.f5_refresh
+            && f5_pressed
+            && !self.show_shortcuts_modal
+            && !self.show_settings_modal
+            && self.delete_modal == DeleteConfirmState::None
+        {
+            self.trigger_scan();
+        }
+
+        // Global F3 shortcut for Live Filter Search Bar (activate / toggle)
+        let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
+        if self.config.shortcuts.f3_search_filter
+            && f3_pressed
+            && !self.show_shortcuts_modal
+            && !self.show_settings_modal
+            && self.delete_modal == DeleteConfirmState::None
+        {
+            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+            self.filter_bar_active = !self.filter_bar_active;
+            if !self.filter_bar_active {
+                self.quick_search_buffer.clear();
+            }
+            self.save_config();
+        }
+
         if !ui.ctx().egui_wants_keyboard_input()
             && self.delete_modal == DeleteConfirmState::None
             && self.active_context_menu.is_none()
@@ -567,21 +607,9 @@ impl eframe::App for FreeDataDietApp {
             let ctrl = ui.input(|i| i.modifiers.ctrl);
             let shift = ui.input(|i| i.modifiers.shift);
             let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
-            let comma_pressed = ui.input(|i| i.key_pressed(egui::Key::Comma));
-            let f12_pressed = ui.input(|i| i.key_pressed(egui::Key::F12));
-            let f5_pressed = ui.input(|i| i.key_pressed(egui::Key::F5));
             let f2_pressed = ui.input(|i| i.key_pressed(egui::Key::F2));
-            let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
 
-            let open_settings = (self.config.shortcuts.ctrl_comma_settings && ctrl && comma_pressed)
-                || (self.config.shortcuts.f12_settings && f12_pressed);
-
-            if open_settings {
-                self.show_settings_modal = !self.show_settings_modal;
-                self.settings_just_opened = self.show_settings_modal;
-            } else if self.config.shortcuts.f5_refresh && f5_pressed {
-                self.trigger_scan();
-            } else if self.config.shortcuts.f2_search_mode && f2_pressed {
+            if self.config.shortcuts.f2_search_mode && f2_pressed {
                 self.config.quick_search_mode = match self.config.quick_search_mode {
                     QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
                     _ => QuickSearchMode::JumpToPrefix,
@@ -593,10 +621,6 @@ impl eframe::App for FreeDataDietApp {
                 };
                 self.status_toast = Some((mode_str.to_string(), Instant::now()));
                 self.quick_search_buffer.clear();
-                self.save_config();
-            } else if self.config.shortcuts.f3_search_filter && f3_pressed {
-                self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-                self.status_toast = Some(("Quick Search: Live Filter".to_string(), Instant::now()));
                 self.save_config();
             } else if self.config.shortcuts.ctrl_shift_h_system && ctrl && shift && h_pressed {
                 self.config.show_system_files = !self.config.show_system_files;
@@ -672,12 +696,12 @@ impl eframe::App for FreeDataDietApp {
                 let mut do_refresh = false;
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Settings (Ctrl+,)").clicked() {
+                    if ui.button("Settings").clicked() {
                         self.show_settings_modal = true;
                         self.settings_just_opened = true;
                     }
 
-                    if ui.button("Refresh (F5)").clicked() {
+                    if ui.button("Refresh").clicked() {
                         do_refresh = true;
                     }
 
@@ -1135,14 +1159,17 @@ impl eframe::App for FreeDataDietApp {
                     QuickSearchMode::LiveFilter => {
                         if key_escape {
                             self.quick_search_buffer.clear();
+                            self.filter_bar_active = false;
                         } else if key_backspace {
                             if !self.quick_search_buffer.is_empty() {
                                 self.quick_search_buffer.pop();
                             } else {
+                                self.filter_bar_active = false;
                                 do_navigate_up = true;
                             }
                         } else if !typed_text.is_empty() {
                             self.quick_search_buffer.push_str(&typed_text);
+                            self.filter_bar_active = true;
                             scroll_to_selected = true;
                         }
 
@@ -1306,20 +1333,28 @@ impl eframe::App for FreeDataDietApp {
             let mut clear_search_buffer = false;
             let matches_count = visible_entries.len();
 
-            if self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+            if self.config.quick_search_mode == QuickSearchMode::LiveFilter && (self.filter_bar_active || !self.quick_search_buffer.is_empty()) {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Filter:").color(if is_dark { Color32::from_rgb(255, 200, 100) } else { Color32::from_rgb(200, 110, 0) }).strong().small());
-                    ui.label(RichText::new(format!("\"{}\"", self.quick_search_buffer)).strong().small());
-                    ui.label(RichText::new(format!("({} matches)", matches_count)).weak().small());
-                    if ui.button("Clear (Esc)").clicked() {
-                        clear_search_buffer = true;
+                    if self.quick_search_buffer.is_empty() {
+                        ui.label(RichText::new("Type letters to filter view...").weak().small());
+                        if ui.button("Close (Esc)").clicked() {
+                            self.filter_bar_active = false;
+                        }
+                    } else {
+                        ui.label(RichText::new(format!("\"{}\"", self.quick_search_buffer)).strong().small());
+                        ui.label(RichText::new(format!("({} matches)", matches_count)).weak().small());
+                        if ui.button("Clear (Esc)").clicked() {
+                            clear_search_buffer = true;
+                        }
                     }
                 });
             }
 
             if clear_search_buffer {
                 self.quick_search_buffer.clear();
+                self.filter_bar_active = false;
             }
 
             ui.add_space(2.0);
@@ -1885,9 +1920,11 @@ impl eframe::App for FreeDataDietApp {
                             let mut add_toggle = |ui: &mut egui::Ui, key: &str, desc: &str, opt: &mut bool| {
                                 ui.label(RichText::new(key).strong().monospace().color(if is_dark { Color32::from_rgb(100, 190, 255) } else { Color32::from_rgb(0, 100, 200) }));
                                 ui.label(desc);
-                                if ui.checkbox(opt, "").changed() {
-                                    shortcuts_changed = true;
-                                }
+                                ui.push_id(key, |ui| {
+                                    if ui.checkbox(opt, "").changed() {
+                                        shortcuts_changed = true;
+                                    }
+                                });
                                 ui.end_row();
                             };
                             let add_fixed = |ui: &mut egui::Ui, key: &str, desc: &str| {
