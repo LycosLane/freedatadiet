@@ -1,1 +1,35 @@
-/target
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Application local state & configuration
+config.json
+config.json.*
+*.tmp
+*.bak
+.fdd_write_test
+
+# Packaging & Release outputs
+*.zip
+*.tar.gz
+*.deb
+*.AppImage
+*.dmg
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# IDE & Editor configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
