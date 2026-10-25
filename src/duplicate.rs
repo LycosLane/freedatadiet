@@ -70,6 +70,25 @@ impl DuplicateCluster {
         Ok(())
     }
 
+    /// Returns the paths in this cluster that are eligible for deletion.
+    /// When all copies are selected but the file header checkbox (`is_group_selected`) is NOT checked,
+    /// none of the copies in this cluster will be deleted.
+    pub fn deletable_paths(&self) -> Vec<PathBuf> {
+        if self.are_all_copies_selected() && !self.is_group_selected {
+            return Vec::new();
+        }
+        self.occurrences
+            .iter()
+            .filter(|o| o.is_selected && !o.is_system_protected)
+            .map(|o| o.path.clone())
+            .collect()
+    }
+
+    /// Total bytes eligible for deletion in this cluster (0 if all copies are selected without header confirmation).
+    pub fn deletable_bytes(&self) -> u64 {
+        self.deletable_paths().len() as u64 * self.file_size
+    }
+
     /// Toggles the group-level checkbox.
     /// When checked, automatically selects all individual copies for purge.
     /// When unchecked, deselects all copies.
@@ -454,15 +473,17 @@ mod tests {
         cluster.set_copy_selected(&PathBuf::from("C:\\A\\file.txt"), true);
         assert!(!cluster.are_all_copies_selected());
         assert!(cluster.validate_deletion_safety().is_ok());
+        assert_eq!(cluster.deletable_paths().len(), 1);
 
         // Select both copies individually, but group header unconfirmed:
-        // Safety gate must trigger and return first occurrence path!
+        // Safety gate must trigger, return first occurrence path, and delete zero copies!
         cluster.set_copy_selected(&PathBuf::from("C:\\B\\file.txt"), true);
         assert!(cluster.are_all_copies_selected());
         assert!(!cluster.is_group_selected);
         let safety_result = cluster.validate_deletion_safety();
         assert!(safety_result.is_err());
         assert_eq!(safety_result.unwrap_err(), PathBuf::from("C:\\A\\file.txt"));
+        assert!(cluster.deletable_paths().is_empty());
 
         // User explicitly checks the group header (file name checkbox):
         // Safety gate passes, complete purge authorized!
@@ -470,6 +491,7 @@ mod tests {
         assert!(cluster.is_group_selected);
         assert!(cluster.are_all_copies_selected());
         assert!(cluster.validate_deletion_safety().is_ok());
+        assert_eq!(cluster.deletable_paths().len(), 2);
     }
 
     #[test]

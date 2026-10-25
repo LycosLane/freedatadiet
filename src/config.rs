@@ -196,8 +196,8 @@ pub struct SavedLocation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StartupLocationMode {
-    #[default]
     FirstFavorite,
+    #[default]
     LastVisitedPath,
     PrimaryDrive,
     CustomPath,
@@ -412,7 +412,7 @@ impl Default for AppConfig {
             custom_excludes: default_custom_excludes(),
             excluded_patterns: default_excluded_patterns(),
             saved_locations: default_saved_locations(),
-            startup_mode: StartupLocationMode::FirstFavorite,
+            startup_mode: StartupLocationMode::LastVisitedPath,
             custom_startup_path: None,
             last_path: None,
             remember_last_path: true,

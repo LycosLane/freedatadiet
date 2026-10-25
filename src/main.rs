@@ -1,15 +1,15 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+pub mod app;
 pub mod config;
 pub mod duplicate;
 pub mod locations;
 pub mod model;
 pub mod platform;
 pub mod scanner;
-pub mod ui;
 pub mod updater;
 
-use ui::FreeDataDietApp;
+use app::FreeDataDietApp;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
