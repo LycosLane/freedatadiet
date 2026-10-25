@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icons/app_icon.png" width="128" alt="FreeDataDiet White Fedora Icon" />
+</p>
+
 # FreeDataDiet
 
 > **Put your storage on a diet.**  
@@ -69,9 +73,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 ## Companion Tools
 
-* **FreeDataDiet:** Analyze and trim overweight folders and files.
-* **FreeDopplerDiet:** Find and eliminate duplicate file clones.
-* **FreeWinly:** Bloatware-free Windows maintenance engine.
+* **[FreeWinly](https://github.com/LycosLane/FreeWinly):** Modular Windows maintenance engine.
 
 ---
 
@@ -149,10 +151,9 @@ cargo build --release
 
 ---
 
-## Related Projects
+## Brand Guidelines
 
-* **[FreeDataDiet Mobile](https://github.com/LycosLane/freedatadiet-mobile):** Android companion app for disk analysis and app-cache management.
-* **[Brand Guidelines](BRANDING.md):** Official White Fedora mark specifications, vector assets, and color palette.
+Official White Fedora mark specifications, vector assets, and color palette are documented in [BRANDING.md](BRANDING.md).
 
 ---
 
