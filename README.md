@@ -73,7 +73,8 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 ## Companion Tools
 
-* **[FreeWinly](https://github.com/LycosLane/FreeWinly):** Modular Windows maintenance engine.
+* **[FreeDataDiet Mobile](https://github.com/LycosLane/freedatadiet-mobile):** Android companion app for storage analysis and cache management.
+* **[FreeWinly](https://github.com/LycosLane/freewinly):** Modular Windows maintenance engine.
 
 ---
 
