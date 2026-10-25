@@ -38,7 +38,7 @@ fn main() {
 
         if let Ok(s) = status {
             if s.success() {
-                println!("cargo:rustc-link-arg={}", res_path.to_str().unwrap());
+                println!("cargo:rustc-link-arg-bins={}", res_path.to_str().unwrap());
             }
         }
     } else {
@@ -55,7 +55,8 @@ fn main() {
 
         if let Ok(s) = status {
             if s.success() {
-                println!("cargo:rustc-link-arg={}", o_path.to_str().unwrap());
+                // Do not link Windows resource object into test runner binaries
+                println!("cargo:rustc-link-arg-bins={}", o_path.to_str().unwrap());
             }
         }
     }

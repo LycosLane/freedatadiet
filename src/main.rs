@@ -1,19 +1,21 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
-mod app;
-mod config;
-mod model;
-mod platform;
-mod scanner;
+pub mod config;
+pub mod duplicate;
+pub mod locations;
+pub mod model;
+pub mod platform;
+pub mod scanner;
+pub mod ui;
 pub mod updater;
 
-use app::FreeDataDietApp;
+use ui::FreeDataDietApp;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1040.0, 700.0])
-            .with_min_inner_size([780.0, 480.0])
+            .with_inner_size([1120.0, 720.0])
+            .with_min_inner_size([800.0, 500.0])
             .with_title("FreeDataDiet - Disk Usage Analyzer"),
         ..Default::default()
     };

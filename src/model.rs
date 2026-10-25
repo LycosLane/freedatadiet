@@ -8,6 +8,57 @@ pub enum SortDirection {
     Descending,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FileCategory {
+    Folder,
+    Image,
+    Video,
+    Audio,
+    Document,
+    Archive,
+    Other,
+}
+
+impl FileCategory {
+    pub fn from_path_and_dir(path: &Path, is_dir: bool) -> Self {
+        if is_dir {
+            return FileCategory::Folder;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+
+        match ext.as_str() {
+            "jpg" | "jpeg" | "png" | "webp" | "avif" | "heic" | "dng" | "raw" | "gif" | "bmp"
+            | "svg" | "ico" | "tiff" => FileCategory::Image,
+            "mp4" | "mkv" | "mov" | "avi" | "webm" | "3gp" | "ts" | "m4v" | "wmv" | "flv" => {
+                FileCategory::Video
+            }
+            "mp3" | "flac" | "m4a" | "wav" | "ogg" | "opus" | "aac" | "wma" => FileCategory::Audio,
+            "pdf" | "doc" | "docx" | "txt" | "epub" | "xlsx" | "xls" | "pptx" | "ppt" | "csv"
+            | "md" | "odt" | "rtf" => FileCategory::Document,
+            "zip" | "rar" | "7z" | "tar" | "gz" | "apk" | "obb" | "bz2" | "xz" | "zst" | "iso" => {
+                FileCategory::Archive
+            }
+            _ => FileCategory::Other,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            FileCategory::Folder => "Folder",
+            FileCategory::Image => "Image",
+            FileCategory::Video => "Video",
+            FileCategory::Audio => "Audio",
+            FileCategory::Document => "Document",
+            FileCategory::Archive => "Archive",
+            FileCategory::Other => "File",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DriveInfo {
     pub name: String,
@@ -16,7 +67,6 @@ pub struct DriveInfo {
     pub available_space: u64,
 }
 
-#[allow(dead_code)]
 impl DriveInfo {
     pub fn used_space(&self) -> u64 {
         self.total_space.saturating_sub(self.available_space)
@@ -38,6 +88,8 @@ pub struct FileEntry {
     pub is_hidden: bool,
     pub is_reparse_point: bool,
     pub is_scanning: bool,
+    pub category: FileCategory,
+    pub duplicate_group_id: Option<String>,
 }
 
 impl FileEntry {
@@ -53,6 +105,7 @@ impl FileEntry {
         is_partially_locked: bool,
     ) -> Self {
         let (is_system_protected, is_hidden, is_reparse_point) = detect_path_attributes(&path, &name);
+        let category = FileCategory::from_path_and_dir(&path, is_dir);
         Self {
             name,
             path,
@@ -67,6 +120,8 @@ impl FileEntry {
             is_hidden,
             is_reparse_point,
             is_scanning: false,
+            category,
+            duplicate_group_id: None,
         }
     }
 }
@@ -97,42 +152,79 @@ pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
 }
 
 pub fn is_system_path(path: &Path) -> bool {
-    let s = path.to_string_lossy().to_lowercase();
+    let raw = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    let s = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
+
     #[cfg(windows)]
     {
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()).to_lowercase();
-        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string()).to_lowercase();
-        let program_files_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string()).to_lowercase();
-        s == system_root
+        let system_root = std::env::var("SystemRoot")
+            .unwrap_or_else(|_| "c:\\windows".to_string())
+            .replace('/', "\\")
+            .to_lowercase();
+        let program_files = std::env::var("ProgramFiles")
+            .unwrap_or_else(|_| "c:\\program files".to_string())
+            .replace('/', "\\")
+            .to_lowercase();
+        let program_files_x86 = std::env::var("ProgramFiles(x86)")
+            .unwrap_or_else(|_| "c:\\program files (x86)".to_string())
+            .replace('/', "\\")
+            .to_lowercase();
+        let program_data = std::env::var("ProgramData")
+            .unwrap_or_else(|_| "c:\\programdata".to_string())
+            .replace('/', "\\")
+            .to_lowercase();
+
+        if s == system_root
             || s.starts_with(&format!("{}\\", system_root))
             || s == program_files
             || s.starts_with(&format!("{}\\", program_files))
             || s == program_files_x86
             || s.starts_with(&format!("{}\\", program_files_x86))
-            || s.contains("system volume information")
-            || s.contains("documents and settings")
-            || s.contains("$recycle.bin")
+            || s == program_data
+            || s.starts_with(&format!("{}\\", program_data))
+        {
+            return true;
+        }
+
+        // Multi-drive protection for secondary installations or drive-level critical folders
+        if s.contains("\\system volume information")
+            || s.contains("\\$recycle.bin")
+            || s.ends_with("\\windows")
+            || s.contains("\\windows\\")
+            || s.ends_with("\\program files")
+            || s.contains("\\program files\\")
+            || s.ends_with("\\programdata")
+            || s.contains("\\programdata\\")
             || s.ends_with("hiberfil.sys")
             || s.ends_with("pagefile.sys")
             || s.ends_with("swapfile.sys")
             || s.ends_with("dumpstack.log.tmp")
+        {
+            return true;
+        }
     }
+
     #[cfg(not(windows))]
     {
         const ROOTS: [&str; 15] = [
-            "/boot", "/etc", "/bin", "/sbin", "/lib", "/usr", "/system", "/library", "/private", "/proc", "/sys",
-            "/dev", "/run", "/root", "/var",
+            "/boot", "/etc", "/bin", "/sbin", "/lib", "/usr", "/system", "/library", "/private",
+            "/proc", "/sys", "/dev", "/run", "/root", "/var",
         ];
-        s == "/" || ROOTS.iter().any(|r| s == *r || s.starts_with(&format!("{}/", r)))
+        if s == "/" || ROOTS.iter().any(|r| s == *r || s.starts_with(&format!("{}/", r))) {
+            return true;
+        }
     }
+
+    false
 }
 
 pub fn is_root_or_system(path: &Path) -> bool {
     if path.parent().is_none() {
         return true;
     }
-    let s = path.to_string_lossy();
-    if s == "/" || s == "\\" || (s.len() <= 3 && s.contains(':')) {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    let s = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
+    if s == "\\" || (s.len() <= 3 && s.contains(':')) {
         return true;
     }
     is_system_path(path)

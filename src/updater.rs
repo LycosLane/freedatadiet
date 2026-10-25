@@ -277,7 +277,10 @@ fn download_and_prepare_update(url: &str, status: &Arc<Mutex<UpdateStatus>>) -> 
     );
 
     let output = Command::new("curl")
-        .args(["-sL", "-o", target_file.to_str().unwrap(), url])
+        .arg("-sL")
+        .arg("-o")
+        .arg(target_file.as_os_str())
+        .arg(url)
         .output()
         .map_err(|e| format!("Download failed: {e}"))?;
 

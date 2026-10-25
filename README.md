@@ -8,7 +8,7 @@
 > A fast, lightweight disk usage analyzer built with Rust & egui.  
 > *Find what is eating your storage with no installer required and no subscriptions.*
 
-[![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
+[![Version: 1.3.0](https://img.shields.io/badge/version-1.3.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
@@ -83,6 +83,9 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | Key / Action | Function |
 | :--- | :--- |
 | **Up / Down** | Navigate selection through folder rows |
+| **Shift + Up / Down** | Expand contiguous selection range |
+| **Space** | Toggle selection checkbox on focused item |
+| **Ctrl + A** | Select all visible items matching current filters |
 | **Home / End** | Jump to top / bottom of current listing |
 | **PageUp / PageDown** | Scroll up / down by 15 items |
 | **Right Arrow** | Enter selected folder |
@@ -90,34 +93,43 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | **Backspace / Left** | Navigate up to parent directory |
 | **A-Z, 0-9 (Quick Search)** | Jump to name (Explorer style) or live filter visible rows |
 | **F2** | Cycle search mode (Jump to Name vs Live Filter) |
-| **F3** | Activate / toggle Live Filter search bar |
-| **Esc** | Clear search filter or close open dialogs |
-| **Delete** | Move selected item to Recycle Bin / Trash |
-| **Shift + Delete** | Permanently delete selected item (with confirmation) |
+| **F3 / Ctrl + F** | Activate / toggle Live Filter search bar |
+| **F4** | Toggle collapsible left sidebar (Favorites & Drives) |
+| **F5** | Refresh and rescan current directory |
+| **F6** | Toggle recursive subfolder flattening view |
+| **Ctrl + D** | Toggle "Duplicates Only" detection view |
+| **Ctrl + Shift + D** | Duplicate Assistant: Select sibling duplicates in folder |
+| **Ctrl + B** | Bookmark active directory to Favorites |
+| **Esc** | Clear selection, dismiss search, or close open dialogs |
+| **Delete** | Move selected items to Recycle Bin / Trash |
+| **Shift + Delete** | Permanently delete selected items (with confirmation) |
 | **Context Menu / Shift+F10** | Open right-click context menu using keyboard |
 | **Ctrl + H** | Toggle hidden files and folders |
 | **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
-| **F12  /  Ctrl + ,** | Open / close Settings & Preferences dialog |
-| **F1  /  ?** | Open / close Keyboard Shortcuts cheat sheet |
-| **F5** | Refresh and rescan current directory |
+| **F12 / Ctrl + ,** | Open / close Settings & Preferences dialog |
+| **F1 / ?** | Open / close Keyboard Shortcuts cheat sheet |
 | **F11** | Toggle fullscreen mode |
 | **Double Click** | Enter directory or open file |
-| **Right Click** | Context menu (Open, Show in file manager, Copy name / path, Properties on Windows, Trash, Permanent Delete) |
-| **Header Click** | Sort by column (click again to invert, 3rd click resets) |
-| **Header Drag & Drop** | Reorder table columns interactively |
+| **Right Click** | Context menu (Open, Show in file manager, Copy path, Favorites toggle, Delete) |
+| **Header Click** | Sort by column (click again to invert) |
 | **`Restart as Admin`** | Elevate to Administrator permissions |
 
 ---
 
 ## Features & Highlights
 
+* **Two-Pass Duplicate Finder:** Identifies byte-exact duplicate files using 4 KB prefix hashing and streaming 64 KB SHA-256 blocks with zero memory bloat.
+* **Selection Safety Gate:** Selecting all duplicate copies in a cluster requires explicit confirmation via the primary file header checkbox before complete deletion is permitted.
+* **Duplicate Assistant:** Identifies sibling duplicates in the same directory whose counterparts are preserved elsewhere, offering one-click batch cleanup.
+* **Favorites & Startup Priority:** Pin custom directories with startup prioritization and non-blocking offline network/USB detection.
+* **Category Filters:** Quick toggle pills for Images, Videos, Audio, Documents, and Archives.
+* **Recursive Subfolder Flattening:** Flatten deep folder hierarchies to inspect leaf files across an entire drive subtree.
 * **Live Discovery:** Folders appear immediately upon scan start with live size calculations.
-* **Type Badges:** Aligned badges (`[DIR]`, `[SYS]`, `[LINK]`, `[LOCK]`, `[PART]`, `[FILE]`) keep names aligned. Hover a badge for its meaning.
+* **Type Badges:** Aligned badges (`[DIR]`, `[SYS]`, `[LINK]`, `[LOCK]`, `[FILE]`) keep names aligned.
 * **Themes:** Built-in Dark Mode, Light Mode, and automatic OS system theme detection.
 * **Usage Bar Scaling:** Scale bars relative to the largest item in view, current folder total, used drive space, or full disk capacity.
-* **Quick Search Modes:** Jump to files by typing a prefix (Explorer style) or live filter matching rows (FilePilot style).
+* **Quick Search Modes:** Jump to files by typing a prefix or live filter matching rows.
 * **Keyboard Navigation:** Full keyboard support across table rows, menus, and delete confirmation modals.
-* **Stable Selection:** Selection remains anchored to the chosen item even as background updates re-sort rows.
 
 ---
 

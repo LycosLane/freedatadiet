@@ -37,7 +37,7 @@ impl ScannerHandle {
     }
 }
 
-pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
+pub fn start_scan(root_path: PathBuf, excludes: Vec<String>, flatten: bool) -> ScannerHandle {
     let (tx, rx) = channel();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_clone = Arc::clone(&cancel_flag);
@@ -48,6 +48,20 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
     thread::spawn(move || {
         let start_time = Instant::now();
         let total_counter = Arc::new(AtomicUsize::new(0));
+        let seen_hardlinks: Arc<Mutex<HashSet<FileId>>> = Arc::new(Mutex::new(HashSet::new()));
+
+        if flatten {
+            scan_flattened(
+                root_path,
+                excludes,
+                cancel_clone,
+                total_counter,
+                seen_hardlinks,
+                tx,
+                start_time,
+            );
+            return;
+        }
 
         let read_res = fs::read_dir(&root_path);
         let entries_dir = match read_res {
@@ -87,7 +101,7 @@ pub fn start_scan(root_path: PathBuf, excludes: Vec<String>) -> ScannerHandle {
                         let (fid_opt, links) = get_file_id_and_links(&path, m);
                         if links > 1 {
                             if let Some(fid) = fid_opt {
-                                !seen_hardlinks.lock().unwrap().insert(fid)
+                                !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(fid)
                             } else {
                                 false
                             }
@@ -270,7 +284,7 @@ fn process_single_entry(
         let (fid_opt, links) = get_file_id_and_links(path, &metadata);
         let is_dup = if links > 1 {
             if let Some(fid) = fid_opt {
-                !seen_hardlinks.lock().unwrap().insert(fid)
+                !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(fid)
             } else {
                 false
             }
@@ -378,7 +392,7 @@ fn process_single_entry(
                                     let (file_fid, links) = get_file_id_and_links(&sub_path, &meta);
                                     let is_dup = if links > 1 {
                                         if let Some(ffid) = file_fid {
-                                            !seen_hardlinks.lock().unwrap().insert(ffid)
+                                            !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(ffid)
                                         } else {
                                             false
                                         }
@@ -417,5 +431,123 @@ fn process_single_entry(
             access_denied,
             partially_locked,
         )
+    }
+}
+
+fn scan_flattened(
+    root_path: PathBuf,
+    excludes: Arc<Vec<String>>,
+    cancel: Arc<AtomicBool>,
+    total_counter: Arc<AtomicUsize>,
+    seen_hardlinks: Arc<Mutex<HashSet<FileId>>>,
+    tx: std::sync::mpsc::Sender<ScanMessage>,
+    start_time: Instant,
+) {
+    let mut total_size = 0u64;
+    let mut total_allocated = 0u64;
+    let mut total_files = 0usize;
+    let mut stack = vec![root_path];
+    let mut batch = Vec::with_capacity(128);
+    let mut last_progress = Instant::now();
+
+    while let Some(dir) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+
+        for entry_res in read_dir {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            if let Ok(entry) = entry_res {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if matches_exclude(&name, &excludes) {
+                    continue;
+                }
+                let path = entry.path();
+                let meta_opt = fs::symlink_metadata(&path).ok();
+                if let Some(meta) = meta_opt {
+                    let is_symlink = meta.file_type().is_symlink();
+                    let is_dir = is_dir_entry(&path, &meta);
+
+                    if is_dir {
+                        if !is_symlink {
+                            stack.push(path);
+                        }
+                    } else {
+                        let size = meta.len();
+                        let alloc = get_allocated_size(&path, size);
+                        let (fid_opt, links) = get_file_id_and_links(&path, &meta);
+                        let is_dup = if links > 1 {
+                            if let Some(fid) = fid_opt {
+                                !seen_hardlinks
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .insert(fid)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if !is_dup {
+                            total_size += size;
+                            total_allocated += alloc;
+                        }
+                        total_files += 1;
+                        let count = total_counter.fetch_add(1, Ordering::Relaxed) + 1;
+
+                        let file_entry = FileEntry::new(
+                            name,
+                            path,
+                            false,
+                            if is_dup { 0 } else { size },
+                            if is_dup { 0 } else { alloc },
+                            meta.modified().ok(),
+                            1,
+                            false,
+                            false,
+                        );
+                        batch.push(file_entry);
+
+                        if batch.len() >= 128 {
+                            if tx
+                                .send(ScanMessage::InitialEntries(std::mem::take(&mut batch)))
+                                .is_err()
+                            {
+                                cancel.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                        }
+
+                        if last_progress.elapsed() > Duration::from_millis(50) {
+                            let _ = tx.send(ScanMessage::Progress {
+                                scanned_items: count,
+                            });
+                            last_progress = Instant::now();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !batch.is_empty() {
+        let _ = tx.send(ScanMessage::InitialEntries(batch));
+    }
+
+    if !cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(ScanMessage::Completed(ScanSummary {
+            total_size,
+            total_allocated,
+            total_files,
+            duration: start_time.elapsed(),
+        }));
     }
 }

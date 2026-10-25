@@ -185,13 +185,190 @@ impl Default for ShortcutSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedLocation {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+    #[serde(default)]
+    pub is_favorite: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum StartupLocationMode {
+    #[default]
+    FirstFavorite,
+    LastVisitedPath,
+    PrimaryDrive,
+    CustomPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateCriteriaConfig {
+    #[serde(default = "default_true")]
+    pub match_size: bool,
+    #[serde(default = "default_true")]
+    pub match_name: bool,
+    #[serde(default)]
+    pub match_timestamp: bool,
+    #[serde(default)]
+    pub verify_hash: bool,
+}
+
+impl Default for DuplicateCriteriaConfig {
+    fn default() -> Self {
+        Self {
+            match_size: true,
+            match_name: true,
+            match_timestamp: false,
+            verify_hash: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryFilterConfig {
+    #[serde(default = "default_true")]
+    pub show_images: bool,
+    #[serde(default = "default_true")]
+    pub show_videos: bool,
+    #[serde(default = "default_true")]
+    pub show_audio: bool,
+    #[serde(default = "default_true")]
+    pub show_documents: bool,
+    #[serde(default = "default_true")]
+    pub show_archives: bool,
+}
+
+impl Default for CategoryFilterConfig {
+    fn default() -> Self {
+        Self {
+            show_images: true,
+            show_videos: true,
+            show_audio: true,
+            show_documents: true,
+            show_archives: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExcludePattern {
+    pub pattern: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub is_preset: bool,
+}
+
+fn default_config_version() -> u32 {
+    1
+}
+
+fn default_custom_excludes() -> String {
+    ".git, node_modules, target, .cache, .venv".to_string()
+}
+
+pub fn default_excluded_patterns() -> Vec<ExcludePattern> {
+    vec![
+        ExcludePattern { pattern: ".git".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: "node_modules".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: "target".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: ".cache".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: ".venv".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: "$RECYCLE.BIN".into(), enabled: true, is_preset: true },
+        ExcludePattern { pattern: "System Volume Information".into(), enabled: true, is_preset: true },
+    ]
+}
+
+pub fn default_saved_locations() -> Vec<SavedLocation> {
+    let mut locs = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            let downloads = user_profile.join("Downloads");
+            if downloads.exists() {
+                locs.push(SavedLocation {
+                    id: "fav_downloads".into(),
+                    name: "Downloads".into(),
+                    path: downloads,
+                    is_favorite: true,
+                });
+            }
+            let docs = user_profile.join("Documents");
+            if docs.exists() {
+                locs.push(SavedLocation {
+                    id: "fav_documents".into(),
+                    name: "Documents".into(),
+                    path: docs,
+                    is_favorite: true,
+                });
+            }
+            let desktop = user_profile.join("Desktop");
+            if desktop.exists() {
+                locs.push(SavedLocation {
+                    id: "fav_desktop".into(),
+                    name: "Desktop".into(),
+                    path: desktop,
+                    is_favorite: true,
+                });
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            let downloads = home.join("Downloads");
+            if downloads.exists() {
+                locs.push(SavedLocation {
+                    id: "fav_downloads".into(),
+                    name: "Downloads".into(),
+                    path: downloads,
+                    is_favorite: true,
+                });
+            }
+            let docs = home.join("Documents");
+            if docs.exists() {
+                locs.push(SavedLocation {
+                    id: "fav_documents".into(),
+                    name: "Documents".into(),
+                    path: docs,
+                    is_favorite: true,
+                });
+            }
+        }
+    }
+    locs
+}
+
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_config_version")]
+    pub config_version: u32,
+
+    #[serde(default = "ColumnId::default_order")]
     pub column_order: Vec<ColumnId>,
     #[serde(default = "default_sort_rules")]
     pub sort_rules: Vec<SortRule>,
+
+    #[serde(default = "default_true")]
     pub ignore_dev_caches: bool,
+    #[serde(default = "default_custom_excludes")]
     pub custom_excludes: String,
+    #[serde(default = "default_excluded_patterns")]
+    pub excluded_patterns: Vec<ExcludePattern>,
+
+    #[serde(default = "default_saved_locations")]
+    pub saved_locations: Vec<SavedLocation>,
+    #[serde(default)]
+    pub startup_mode: StartupLocationMode,
+    #[serde(default)]
+    pub custom_startup_path: Option<PathBuf>,
+
     pub last_path: Option<PathBuf>,
     #[serde(default = "default_true")]
     pub remember_last_path: bool,
@@ -204,29 +381,54 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub show_locked_folders: bool,
     #[serde(default)]
+    pub flatten_subfolders: bool,
+    #[serde(default)]
+    pub category_filters: CategoryFilterConfig,
+
+    #[serde(default)]
+    pub show_duplicates_only: bool,
+    #[serde(default)]
+    pub duplicate_criteria: DuplicateCriteriaConfig,
+
+    #[serde(default)]
     pub shortcuts: ShortcutSettings,
     #[serde(default)]
     pub quick_search_mode: QuickSearchMode,
     #[serde(default)]
     pub theme: AppTheme,
+    #[serde(default = "default_true")]
+    pub show_sidebar: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            config_version: 2,
             column_order: ColumnId::default_order(),
             sort_rules: default_sort_rules(),
             ignore_dev_caches: true,
-            custom_excludes: ".git, node_modules, target, .cache, .venv".to_string(),
+            custom_excludes: default_custom_excludes(),
+            excluded_patterns: default_excluded_patterns(),
+            saved_locations: default_saved_locations(),
+            startup_mode: StartupLocationMode::FirstFavorite,
+            custom_startup_path: None,
             last_path: None,
             remember_last_path: true,
             usage_basis: UsageBasis::Folder,
             show_hidden_files: false,
             show_system_files: false,
             show_locked_folders: true,
+            flatten_subfolders: false,
+            category_filters: CategoryFilterConfig::default(),
+            show_duplicates_only: false,
+            duplicate_criteria: DuplicateCriteriaConfig::default(),
             shortcuts: ShortcutSettings::default(),
             quick_search_mode: QuickSearchMode::JumpToPrefix,
             theme: AppTheme::Dark,
+            show_sidebar: true,
+            ui_scale: 1.0,
         }
     }
 }
@@ -275,11 +477,37 @@ impl AppConfig {
         ok
     }
 
+    pub fn migrate_legacy(mut self) -> Self {
+        if self.config_version < 2 {
+            for item in self.custom_excludes.split(',') {
+                let trimmed = item.trim();
+                if !trimmed.is_empty()
+                    && !self
+                        .excluded_patterns
+                        .iter()
+                        .any(|p| p.pattern.eq_ignore_ascii_case(trimmed))
+                {
+                    self.excluded_patterns.push(ExcludePattern {
+                        pattern: trimmed.to_string(),
+                        enabled: self.ignore_dev_caches,
+                        is_preset: false,
+                    });
+                }
+            }
+            if self.saved_locations.is_empty() {
+                self.saved_locations = default_saved_locations();
+            }
+            self.config_version = 2;
+        }
+        self
+    }
+
     pub fn load() -> Self {
         let path = Self::config_path();
         if path.exists() {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&contents) {
+                    cfg = cfg.migrate_legacy();
                     if !cfg.column_order.contains(&ColumnId::Type) {
                         cfg.column_order.insert(0, ColumnId::Type);
                     }
@@ -314,5 +542,31 @@ impl AppConfig {
             let _ = std::fs::remove_file(&tmp);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_v1_config_migration() {
+        let legacy_json = r#"{
+            "column_order": ["Type", "Name", "Size"],
+            "sort_rules": [{"column": "Size", "direction": "Descending"}],
+            "ignore_dev_caches": true,
+            "custom_excludes": ".git, node_modules, custom_cache",
+            "last_path": null,
+            "remember_last_path": true
+        }"#;
+
+        let parsed: AppConfig = serde_json::from_str(legacy_json).expect("Legacy v1 config must deserialize with defaults");
+        let migrated = parsed.migrate_legacy();
+
+        assert_eq!(migrated.config_version, 2);
+        assert!(migrated.excluded_patterns.iter().any(|p| p.pattern == "custom_cache"));
+        assert!(migrated.category_filters.show_images);
+        assert!(migrated.duplicate_criteria.match_size);
+        assert!(!migrated.show_duplicates_only);
     }
 }
