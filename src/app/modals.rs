@@ -504,7 +504,7 @@ impl FreeDataDietApp {
             let tab_backward = ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::Tab));
             let activate = ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
 
-            const TOTAL_SHORTCUT_ITEMS: usize = 11; // 10 toggles (0..9) + Close button (10)
+            const TOTAL_SHORTCUT_ITEMS: usize = 12; // 11 toggles (0..10) + Close button (11)
 
             if tab_forward || nav_down {
                 self.shortcuts_selected_idx = (self.shortcuts_selected_idx + 1) % TOTAL_SHORTCUT_ITEMS;
@@ -543,8 +543,15 @@ impl FreeDataDietApp {
                                 let cur_idx = toggle_idx;
                                 toggle_idx += 1;
                                 let is_focused = sel_sc_idx == cur_idx;
-                                let key_label = if is_focused { format!("> {}", key) } else { key.to_string() };
-                                ui.label(RichText::new(key_label).strong().monospace().color(if is_dark { Color32::from_rgb(100, 190, 255) } else { Color32::from_rgb(0, 100, 200) }));
+                                let key_resp = ui.label(RichText::new(key).strong().monospace().color(if is_dark { Color32::from_rgb(100, 190, 255) } else { Color32::from_rgb(0, 100, 200) }));
+                                if is_focused {
+                                    ui.painter().rect_stroke(
+                                        key_resp.rect.expand(2.0),
+                                        2.0,
+                                        egui::Stroke::new(1.5, Color32::from_rgb(100, 180, 255)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
                                 ui.label(desc);
                                 ui.push_id(key, |ui| {
                                     let resp = ui.checkbox(opt, "");
@@ -574,13 +581,15 @@ impl FreeDataDietApp {
 
                             add_sec(ui, "Navigation");
                             add_fixed(ui, "Up / Down", "Move selection through folder rows");
+                            add_fixed(ui, "Left", "Navigate up to parent directory");
                             add_fixed(ui, "Right", "Enter selected folder");
                             add_fixed(ui, "Enter", "Enter selected folder or open selected file");
-                            add_fixed(ui, "Left / Backspace", "Navigate up to parent directory");
+                            add_fixed(ui, "Backspace", "Navigate up to parent directory");
                             add_fixed(ui, "Home / End", "Jump to first / last item in current folder");
                             add_fixed(ui, "PageUp / PageDown", "Scroll up / down by 15 items");
 
                             add_sec(ui, "Quick Search");
+                            add_toggle(ui, "Ctrl + F", "Activate Live Filter search bar", &mut self.config.shortcuts.ctrl_f_filter);
                             add_toggle(ui, "F2", "Cycle search mode (Jump to Name vs Live Filter)", &mut self.config.shortcuts.f2_search_mode);
                             add_toggle(ui, "F3", "Activate Live Filter search bar", &mut self.config.shortcuts.f3_search_filter);
                             add_fixed(ui, "A-Z, 0-9", "Jump to name (Explorer) or live filter the list (FilePilot)");
@@ -589,17 +598,17 @@ impl FreeDataDietApp {
                             add_sec(ui, "File Operations & Modes");
                             add_toggle(ui, "Del", "Move selected item to Recycle Bin / Trash", &mut self.config.shortcuts.del_trash);
                             add_toggle(ui, "Shift + Del", "Permanently delete selected item (with confirmation)", &mut self.config.shortcuts.shift_del_permanent);
-                            add_fixed(ui, "Menu / Shift+F10", "Open right-click context menu using keyboard");
+                            add_fixed(ui, "Menu / F10", "Open right-click context menu using keyboard");
                             add_toggle(ui, "F5", "Refresh and rescan current directory", &mut self.config.shortcuts.f5_refresh);
-                            add_fixed(ui, "F6", "Toggle recursive / flatten subfolders scan");
+                            add_fixed(ui, "F6", "Toggle Include Subfolders scan");
                             add_fixed(ui, "Ctrl + D", "Toggle Duplicate Finder view");
                             add_fixed(ui, "Ctrl + B", "Bookmark current folder to Favorites");
 
                             add_sec(ui, "Preferences & View");
-                            add_fixed(ui, "F1 / ?", "Toggle this Keyboard Shortcuts cheat sheet (open / close)");
+                            add_fixed(ui, "F1", "Toggle this Keyboard Shortcuts cheat sheet (open / close)");
                             add_toggle(ui, "F11", "Toggle fullscreen mode", &mut self.config.shortcuts.f11_fullscreen);
-                            add_toggle(ui, "F12", "Toggle Settings & Menu left panel", &mut self.config.shortcuts.f12_settings);
-                            add_toggle(ui, "Ctrl + ,", "Toggle Settings & Menu left panel", &mut self.config.shortcuts.ctrl_comma_settings);
+                            add_toggle(ui, "F12", "Toggle Settings & Menu panel", &mut self.config.shortcuts.f12_settings);
+                            add_toggle(ui, "Ctrl + ,", "Toggle Settings & Menu panel", &mut self.config.shortcuts.ctrl_comma_settings);
                             add_toggle(ui, "Ctrl + H", "Toggle hidden files and folders", &mut self.config.shortcuts.ctrl_h_hidden);
                             add_toggle(ui, "Ctrl + Shift + H", "Toggle protected system files & links", &mut self.config.shortcuts.ctrl_shift_h_system);
                         });
@@ -614,7 +623,7 @@ impl FreeDataDietApp {
                         ui.label(RichText::new("Press Esc / F1 or click outside to return").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let resp_close = ui.button("Close (Esc / F1)");
-                            if sel_sc_idx == 10 {
+                            if sel_sc_idx == 11 {
                                 ui.painter().rect_stroke(
                                     resp_close.rect.expand(2.0),
                                     3.0,
@@ -622,7 +631,7 @@ impl FreeDataDietApp {
                                     egui::StrokeKind::Outside,
                                 );
                             }
-                            if resp_close.clicked() || (sel_sc_idx == 10 && activate) {
+                            if resp_close.clicked() || (sel_sc_idx == 11 && activate) {
                                 close_shortcuts = true;
                             }
                         });

@@ -1,7 +1,10 @@
 pub mod duplicates_view;
 pub mod modals;
 pub mod sidebar;
+pub mod sorting;
 pub mod table;
+
+pub use self::sorting::get_type_badge;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,14 +13,21 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Panel, RichText, Vec2};
 
-use crate::config::{AppConfig, AppTheme, ColumnId, QuickSearchMode, SortRule};
+use crate::config::{AppConfig, AppTheme, QuickSearchMode};
 use crate::duplicate::{DuplicateCluster, DuplicateEngine, DuplicateSuggestion};
 use crate::locations::LocationManager;
-use crate::model::{format_size, DriveInfo, FileEntry, SortDirection};
+use crate::model::{format_size, DriveInfo, FileEntry};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
 
 use self::modals::{ActiveContextMenu, DeleteConfirmState, DeleteModalFocus};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActivePanelFocus {
+    #[default]
+    MainView,
+    SettingsPanel,
+}
 
 pub struct FreeDataDietApp {
     pub(super) config: AppConfig,
@@ -30,6 +40,9 @@ pub struct FreeDataDietApp {
     pub(super) entries: Vec<FileEntry>,
     pub(super) selected_path: Option<PathBuf>,
     pub(super) force_scroll_to_selected: bool,
+    pub(super) selected_favorites: std::collections::HashSet<PathBuf>,
+    pub(super) panel_focus: ActivePanelFocus,
+    pub(super) settings_nav_idx: usize,
 
     // Duplicates & Assistant
     pub(super) duplicate_clusters: Vec<DuplicateCluster>,
@@ -95,6 +108,9 @@ impl FreeDataDietApp {
             entries: Vec::new(),
             selected_path: None,
             force_scroll_to_selected: false,
+            selected_favorites: std::collections::HashSet::new(),
+            panel_focus: ActivePanelFocus::MainView,
+            settings_nav_idx: 0,
             duplicate_clusters: Vec::new(),
             active_suggestion: None,
             safety_warning: None,
@@ -177,7 +193,12 @@ impl FreeDataDietApp {
         self.path_input = self.current_path.to_string_lossy().to_string();
         let excludes = self.collect_excludes();
         let flatten = self.config.flatten_subfolders || self.config.show_duplicates_only;
-        self.scanner = Some(start_scan(self.current_path.clone(), excludes, flatten));
+        let scan_roots = if self.selected_favorites.len() > 1 {
+            self.selected_favorites.iter().cloned().collect()
+        } else {
+            vec![self.current_path.clone()]
+        };
+        self.scanner = Some(start_scan(scan_roots, excludes, flatten));
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf) {
@@ -185,6 +206,7 @@ impl FreeDataDietApp {
             self.quick_search_buffer.clear();
             self.quick_search_time = None;
             self.filter_bar_active = false;
+            self.selected_favorites.clear();
             self.current_path = path;
             self.save_config();
             self.trigger_scan();
@@ -285,223 +307,6 @@ impl FreeDataDietApp {
             self.compute_duplicates();
         }
     }
-
-    pub(super) fn sort_entries(&mut self) {
-        let rules = self.config.sort_rules.clone();
-
-        self.entries.sort_by(|a, b| {
-            for rule in &rules {
-                let directed = match rule.column {
-                    ColumnId::Type => {
-                        let a_key = get_type_sort_key(a);
-                        let b_key = get_type_sort_key(b);
-                        let cmp = a_key.cmp(&b_key);
-                        match rule.direction {
-                            SortDirection::Ascending => cmp,
-                            SortDirection::Descending => cmp.reverse(),
-                        }
-                    }
-                    ColumnId::Name => {
-                        let cmp = a.name.chars().flat_map(char::to_lowercase).cmp(b.name.chars().flat_map(char::to_lowercase));
-                        match rule.direction {
-                            SortDirection::Ascending => cmp,
-                            SortDirection::Descending => cmp.reverse(),
-                        }
-                    }
-                    ColumnId::Size | ColumnId::Usage => {
-                        if a.is_scanning != b.is_scanning {
-                            match rule.direction {
-                                SortDirection::Descending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Less
-                                    } else {
-                                        std::cmp::Ordering::Greater
-                                    }
-                                }
-                                SortDirection::Ascending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Greater
-                                    } else {
-                                        std::cmp::Ordering::Less
-                                    }
-                                }
-                            }
-                        } else {
-                            let cmp = a.size.cmp(&b.size);
-                            match rule.direction {
-                                SortDirection::Ascending => cmp,
-                                SortDirection::Descending => cmp.reverse(),
-                            }
-                        }
-                    }
-                    ColumnId::AllocatedSize => {
-                        if a.is_scanning != b.is_scanning {
-                            match rule.direction {
-                                SortDirection::Descending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Less
-                                    } else {
-                                        std::cmp::Ordering::Greater
-                                    }
-                                }
-                                SortDirection::Ascending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Greater
-                                    } else {
-                                        std::cmp::Ordering::Less
-                                    }
-                                }
-                            }
-                        } else {
-                            let cmp = a.allocated_size.cmp(&b.allocated_size);
-                            match rule.direction {
-                                SortDirection::Ascending => cmp,
-                                SortDirection::Descending => cmp.reverse(),
-                            }
-                        }
-                    }
-                    ColumnId::Items => {
-                        if a.is_scanning != b.is_scanning {
-                            match rule.direction {
-                                SortDirection::Descending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Less
-                                    } else {
-                                        std::cmp::Ordering::Greater
-                                    }
-                                }
-                                SortDirection::Ascending => {
-                                    if a.is_scanning {
-                                        std::cmp::Ordering::Greater
-                                    } else {
-                                        std::cmp::Ordering::Less
-                                    }
-                                }
-                            }
-                        } else {
-                            let cmp = a.item_count.cmp(&b.item_count);
-                            match rule.direction {
-                                SortDirection::Ascending => cmp,
-                                SortDirection::Descending => cmp.reverse(),
-                            }
-                        }
-                    }
-                    ColumnId::Modified => {
-                        let cmp = a.modified.cmp(&b.modified);
-                        match rule.direction {
-                            SortDirection::Ascending => cmp,
-                            SortDirection::Descending => cmp.reverse(),
-                        }
-                    }
-                };
-
-                if directed != std::cmp::Ordering::Equal {
-                    return directed;
-                }
-            }
-
-            a.name.chars().flat_map(char::to_lowercase).cmp(b.name.chars().flat_map(char::to_lowercase))
-        });
-    }
-
-    pub(super) fn toggle_sort_column(&mut self, col: ColumnId) {
-        if let Some(pos) = self.config.sort_rules.iter().position(|r| r.column == col) {
-            let default_dir = match col {
-                ColumnId::Name | ColumnId::Type => SortDirection::Ascending,
-                _ => SortDirection::Descending,
-            };
-            if self.config.sort_rules[pos].direction == default_dir {
-                // Second click: invert direction
-                self.config.sort_rules[pos].direction = match default_dir {
-                    SortDirection::Ascending => SortDirection::Descending,
-                    SortDirection::Descending => SortDirection::Ascending,
-                };
-            } else {
-                // Third click: remove sort rule
-                self.config.sort_rules.remove(pos);
-            }
-        } else {
-            let default_dir = match col {
-                ColumnId::Name | ColumnId::Type => SortDirection::Ascending,
-                _ => SortDirection::Descending,
-            };
-            self.config.sort_rules.push(SortRule {
-                column: col,
-                direction: default_dir,
-            });
-        }
-        self.sort_entries();
-        self.save_config();
-    }
-}
-
-pub(super) fn get_type_sort_key(e: &FileEntry) -> (u8, String) {
-    if e.is_dir {
-        if e.is_reparse_point {
-            (1, e.name.to_lowercase())
-        } else {
-            (0, e.name.to_lowercase())
-        }
-    } else if let Some(ext) = e.path.extension().and_then(|s| s.to_str()) {
-        (2, ext.to_lowercase())
-    } else {
-        (3, e.name.to_lowercase())
-    }
-}
-
-pub(super) fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32, &'static str) {
-    if entry.is_reparse_point {
-        (
-            "[LINK]".to_string(),
-            if is_dark { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(130, 70, 200) },
-            "Link: Directory junction or symbolic link to another folder",
-        )
-    } else if entry.is_system_protected {
-        (
-            "[SYS]".to_string(),
-            if is_dark { Color32::from_rgb(255, 175, 40) } else { Color32::from_rgb(200, 110, 0) },
-            "System: Protected system directory or file",
-        )
-    } else if entry.is_access_denied {
-        (
-            "[LOCK]".to_string(),
-            if is_dark { Color32::from_rgb(255, 90, 90) } else { Color32::from_rgb(200, 30, 30) },
-            "Locked: Permission denied, folder cannot be scanned",
-        )
-    } else if entry.is_partially_locked {
-        (
-            "[PART]".to_string(),
-            if is_dark { Color32::from_rgb(255, 190, 70) } else { Color32::from_rgb(210, 130, 10) },
-            "Partially Locked: Accessible, but some subfolders were restricted",
-        )
-    } else if entry.is_dir {
-        (
-            "[DIR]".to_string(),
-            if is_dark { Color32::from_rgb(80, 200, 255) } else { Color32::from_rgb(0, 120, 210) },
-            "Directory: Standard folder",
-        )
-    } else if let Some(ext) = entry.path.extension().and_then(|e| e.to_str()) {
-        let ext_upper = ext.to_uppercase();
-        if ext_upper.len() <= 4 {
-            (
-                format!("[{}]", ext_upper),
-                if is_dark { Color32::from_rgb(160, 185, 205) } else { Color32::from_rgb(60, 90, 120) },
-                "File",
-            )
-        } else {
-            (
-                "[FILE]".to_string(),
-                if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
-                "File",
-            )
-        }
-    } else {
-        (
-            "[FILE]".to_string(),
-            if is_dark { Color32::from_rgb(150, 160, 175) } else { Color32::from_rgb(90, 100, 115) },
-            "File",
-        )
-    }
 }
 
 impl eframe::App for FreeDataDietApp {
@@ -530,16 +335,29 @@ impl eframe::App for FreeDataDietApp {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
 
-        // Global F1 / ? shortcut for Shortcuts Help (always active everywhere)
-        let f1_pressed = ui.input(|i| {
-            i.key_pressed(egui::Key::F1)
-                || (i.modifiers.shift && i.key_pressed(egui::Key::Slash) && !ui.ctx().egui_wants_keyboard_input())
-        });
+        // Global F1 shortcut for Shortcuts Help (always active everywhere)
+        let f1_pressed = ui.input(|i| i.key_pressed(egui::Key::F1));
         if f1_pressed {
             self.show_shortcuts_modal = !self.show_shortcuts_modal;
             self.shortcuts_just_opened = self.show_shortcuts_modal;
             if self.show_shortcuts_modal {
                 self.shortcuts_selected_idx = 0;
+            }
+        }
+
+        // Tab switches focus between Main View and Settings Panel
+        let tab_pressed = ui.input(|i| i.key_pressed(egui::Key::Tab));
+        if tab_pressed
+            && !ui.ctx().egui_wants_keyboard_input()
+            && self.delete_modal == DeleteConfirmState::None
+            && self.active_context_menu.is_none()
+            && !self.show_shortcuts_modal
+        {
+            if self.config.show_sidebar {
+                self.panel_focus = match self.panel_focus {
+                    ActivePanelFocus::MainView => ActivePanelFocus::SettingsPanel,
+                    ActivePanelFocus::SettingsPanel => ActivePanelFocus::MainView,
+                };
             }
         }
 
@@ -573,7 +391,7 @@ impl eframe::App for FreeDataDietApp {
             self.trigger_scan();
         }
 
-        // Global F6 shortcut for Recursive / Flatten Subfolders
+        // Global F6 shortcut for Include Subfolders
         let f6_pressed = ui.input(|i| i.key_pressed(egui::Key::F6));
         if f6_pressed
             && !self.show_shortcuts_modal
@@ -581,9 +399,9 @@ impl eframe::App for FreeDataDietApp {
         {
             self.config.flatten_subfolders = !self.config.flatten_subfolders;
             let msg = if self.config.flatten_subfolders {
-                "Recursive subfolder scan enabled"
+                "Include Subfolders enabled"
             } else {
-                "Standard single-folder scan enabled"
+                "Include Subfolders disabled"
             };
             self.status_toast = Some((msg.to_string(), Instant::now()));
             self.save_config();
@@ -615,9 +433,16 @@ impl eframe::App for FreeDataDietApp {
             let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
             let d_pressed = ui.input(|i| i.key_pressed(egui::Key::D));
             let b_pressed = ui.input(|i| i.key_pressed(egui::Key::B));
+            let f_pressed = ui.input(|i| i.key_pressed(egui::Key::F));
             let f2_pressed = ui.input(|i| i.key_pressed(egui::Key::F2));
 
-            if self.config.shortcuts.f2_search_mode && f2_pressed {
+            if self.config.shortcuts.ctrl_f_filter && ctrl && !shift && f_pressed {
+                self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                self.filter_bar_active = true;
+                self.quick_search_buffer.clear();
+                self.panel_focus = ActivePanelFocus::MainView;
+                self.save_config();
+            } else if self.config.shortcuts.f2_search_mode && f2_pressed {
                 self.config.quick_search_mode = match self.config.quick_search_mode {
                     QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
                     _ => QuickSearchMode::JumpToPrefix,
@@ -763,11 +588,12 @@ impl eframe::App for FreeDataDietApp {
                 let mut do_refresh = false;
                 let mut toggle_duplicates = false;
                 let mut toggle_flatten = false;
+                let mut clear_fav_selection = false;
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .selectable_label(self.config.show_sidebar, RichText::new("Settings & Menu").strong())
-                        .on_hover_text("Toggle live Settings, Filters & Favorites sidebar (F12 / Ctrl+,)")
+                        .on_hover_text("Toggle live Settings, Filters & Favorites panel (F12 / Ctrl+,)")
                         .clicked()
                     {
                         self.config.show_sidebar = !self.config.show_sidebar;
@@ -778,7 +604,7 @@ impl eframe::App for FreeDataDietApp {
                         .selectable_label(
                             self.config.show_duplicates_only,
                             RichText::new("Duplicates").color(if self.config.show_duplicates_only {
-                                Color32::from_rgb(255, 190, 60)
+                                Color32::from_rgb(255, 140, 0)
                             } else if is_dark {
                                 Color32::LIGHT_GRAY
                             } else {
@@ -794,9 +620,9 @@ impl eframe::App for FreeDataDietApp {
                     if ui
                         .selectable_label(
                             self.config.flatten_subfolders,
-                            RichText::new("Recursive"),
+                            RichText::new("Include Subfolders"),
                         )
-                        .on_hover_text("Flatten and list all files across all subfolders (F6)")
+                        .on_hover_text("Scan and list all files and subfolders in one flat view (F6)")
                         .clicked()
                     {
                         toggle_flatten = true;
@@ -810,19 +636,37 @@ impl eframe::App for FreeDataDietApp {
                         do_browse = true;
                     }
 
-                    let path_width = (ui.available_width() - 8.0).max(120.0);
-                    let text_edit = ui.add_sized(
-                        Vec2::new(path_width, 24.0),
-                        egui::TextEdit::singleline(&mut self.path_input),
-                    );
+                    if self.selected_favorites.len() > 1 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("[Multi-Select: {} locations]", self.selected_favorites.len()))
+                                    .strong()
+                                    .color(if is_dark { Color32::from_rgb(100, 200, 255) } else { Color32::from_rgb(0, 110, 220) }),
+                            );
+                            if ui.small_button("Clear Selection").clicked() {
+                                clear_fav_selection = true;
+                            }
+                        });
+                    } else {
+                        let path_width = (ui.available_width() - 8.0).max(120.0);
+                        let text_edit = ui.add_sized(
+                            Vec2::new(path_width, 24.0),
+                            egui::TextEdit::singleline(&mut self.path_input),
+                        );
 
-                    if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        let candidate = PathBuf::from(&self.path_input);
-                        if candidate.exists() {
-                            self.navigate_to(candidate);
+                        if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let candidate = PathBuf::from(&self.path_input);
+                            if candidate.exists() {
+                                self.navigate_to(candidate);
+                            }
                         }
                     }
                 });
+
+                if clear_fav_selection {
+                    self.selected_favorites.clear();
+                    self.trigger_scan();
+                }
 
                 if do_browse {
                     if let Some(folder) = rfd::FileDialog::new()
@@ -854,10 +698,10 @@ impl eframe::App for FreeDataDietApp {
             self.navigate_to(drive_path);
         }
 
-        // --- LEFT PANEL: LIVE SETTINGS, FILTERS, FAVORITES & DRIVES ---
+        // --- RIGHT PANEL: LIVE SETTINGS, FILTERS, FAVORITES & DRIVES ---
         if self.config.show_sidebar {
-            Panel::left("left_settings_panel").show(ui, |ui| {
-                self.render_left_panel(ui, is_dark);
+            Panel::right("right_settings_panel").show(ui, |ui| {
+                self.render_sidebar(ui, is_dark);
             });
         }
 

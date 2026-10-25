@@ -151,6 +151,8 @@ pub struct ShortcutSettings {
     #[serde(default = "default_true")]
     pub f3_search_filter: bool,
     #[serde(default = "default_true")]
+    pub ctrl_f_filter: bool,
+    #[serde(default = "default_true")]
     pub f5_refresh: bool,
     #[serde(default = "default_true")]
     pub f11_fullscreen: bool,
@@ -173,6 +175,7 @@ impl Default for ShortcutSettings {
         Self {
             f2_search_mode: true,
             f3_search_filter: true,
+            ctrl_f_filter: true,
             f5_refresh: true,
             f11_fullscreen: true,
             f12_settings: true,
@@ -398,6 +401,8 @@ pub struct AppConfig {
     pub theme: AppTheme,
     #[serde(default = "default_true")]
     pub show_sidebar: bool,
+    #[serde(default = "default_true")]
+    pub show_shortcuts_in_settings: bool,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
 }
@@ -428,6 +433,7 @@ impl Default for AppConfig {
             quick_search_mode: QuickSearchMode::JumpToPrefix,
             theme: AppTheme::Dark,
             show_sidebar: true,
+            show_shortcuts_in_settings: true,
             ui_scale: 1.0,
         }
     }

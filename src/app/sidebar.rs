@@ -7,19 +7,93 @@ use crate::config::{AppConfig, AppTheme, QuickSearchMode, StartupLocationMode, U
 use crate::locations::LocationManager;
 use crate::model::format_size;
 
-use super::FreeDataDietApp;
+use super::{ActivePanelFocus, FreeDataDietApp};
+
+fn setting_pill(
+    ui: &mut egui::Ui,
+    is_active: bool,
+    is_focused: bool,
+    label: &str,
+    shortcut: Option<&str>,
+    show_shortcuts: bool,
+    is_orange: bool,
+    is_dark: bool,
+) -> egui::Response {
+    let active_bg = if is_orange {
+        Color32::from_rgb(235, 115, 15)
+    } else {
+        Color32::from_rgb(30, 120, 220)
+    };
+    let inactive_bg = if is_dark {
+        Color32::from_gray(38)
+    } else {
+        Color32::from_gray(230)
+    };
+
+    let bg_color = if is_active { active_bg } else { inactive_bg };
+    let stroke = if is_focused {
+        Stroke::new(1.5, Color32::from_rgb(100, 185, 255))
+    } else if is_active {
+        Stroke::new(1.0, active_bg)
+    } else {
+        Stroke::new(1.0, if is_dark { Color32::from_gray(55) } else { Color32::from_gray(205) })
+    };
+
+    let text_color = if is_active {
+        Color32::WHITE
+    } else if is_dark {
+        Color32::from_gray(215)
+    } else {
+        Color32::from_gray(35)
+    };
+
+    let frame_resp = egui::Frame::new()
+        .fill(bg_color)
+        .stroke(stroke)
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(8, 5))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(label).strong().color(text_color));
+                if show_shortcuts {
+                    if let Some(sc) = shortcut {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let badge_col = if is_active {
+                                Color32::from_rgb(230, 240, 255)
+                            } else if is_dark {
+                                Color32::from_rgb(100, 180, 240)
+                            } else {
+                                Color32::from_rgb(0, 90, 180)
+                            };
+                            ui.label(RichText::new(format!("[{}]", sc)).small().monospace().color(badge_col));
+                        });
+                    }
+                }
+            });
+        })
+        .response;
+
+    ui.interact(frame_resp.rect, ui.scope_id().with(label), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
 
 impl FreeDataDietApp {
-    pub(super) fn render_left_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.set_width(290.0);
+    pub(super) fn render_sidebar(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.set_width(300.0);
         ui.add_space(4.0);
 
+        let is_panel_focused = self.panel_focus == ActivePanelFocus::SettingsPanel;
+
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Settings, Filters & Locations").size(14.0).strong());
+            ui.label(RichText::new("Settings & Locations").size(14.0).strong());
+            if is_panel_focused {
+                ui.label(RichText::new("[Focused - Tab to view]").small().color(Color32::from_rgb(100, 185, 255)));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("Hide (F12)")
-                    .on_hover_text("Collapse left panel (F12 / F4 / Ctrl+,)")
+                    .on_hover_text("Collapse settings panel (F12 / F4 / Ctrl+,)")
                     .clicked()
                 {
                     self.config.show_sidebar = false;
@@ -33,6 +107,19 @@ impl FreeDataDietApp {
         let mut nav_target: Option<PathBuf> = None;
         let mut trigger_rescan = false;
         let mut recompute_dups = false;
+        let show_sc = self.config.show_shortcuts_in_settings;
+
+        const TOTAL_SETTINGS_ITEMS: usize = 29;
+
+        let nav_down = is_panel_focused && ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+        let nav_up = is_panel_focused && ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let key_activate = is_panel_focused && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+
+        if nav_down {
+            self.settings_nav_idx = (self.settings_nav_idx + 1) % TOTAL_SETTINGS_ITEMS;
+        } else if nav_up {
+            self.settings_nav_idx = (self.settings_nav_idx + TOTAL_SETTINGS_ITEMS - 1) % TOTAL_SETTINGS_ITEMS;
+        }
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -54,9 +141,13 @@ impl FreeDataDietApp {
                     };
 
                     let card_bg = if is_current {
-                        if is_dark { Color32::from_rgb(32, 54, 82) } else { Color32::from_rgb(205, 228, 252) }
+                        if is_dark {
+                            Color32::from_rgb(25, 45, 70)
+                        } else {
+                            Color32::from_rgb(220, 235, 252)
+                        }
                     } else if is_dark {
-                        Color32::from_rgb(26, 33, 44)
+                        Color32::from_rgb(32, 38, 48)
                     } else {
                         Color32::from_rgb(238, 242, 248)
                     };
@@ -118,9 +209,15 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 2. FAVORITES ---
+                // --- 2. FAVORITES (WITH CTRL+CLICK MULTI-SELECT) ---
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Favorites").size(13.5).strong());
+                    if self.selected_favorites.len() > 1 {
+                        if ui.small_button(format!("Clear ({})", self.selected_favorites.len())).clicked() {
+                            self.selected_favorites.clear();
+                            trigger_rescan = true;
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("+ Add Current")
@@ -132,6 +229,7 @@ impl FreeDataDietApp {
                         }
                     });
                 });
+                ui.label(RichText::new("Hold Ctrl to select multiple folders to search across").weak().small());
                 ui.add_space(2.0);
 
                 let mut remove_fav = None;
@@ -139,11 +237,14 @@ impl FreeDataDietApp {
                 let mut move_fav = None;
 
                 for (i, loc) in self.config.saved_locations.iter().enumerate() {
-                    let is_active = self.current_path == loc.path;
+                    let is_multi_selected = self.selected_favorites.contains(&loc.path);
+                    let is_active = self.current_path == loc.path || is_multi_selected;
                     let is_accessible = self.location_mgr.is_accessible(&loc.path);
                     let is_startup = i == 0 && self.config.startup_mode == StartupLocationMode::FirstFavorite;
 
-                    let row_bg = if is_active {
+                    let row_bg = if is_multi_selected {
+                        if is_dark { Color32::from_rgb(20, 60, 110) } else { Color32::from_rgb(190, 220, 255) }
+                    } else if is_active {
                         if is_dark { Color32::from_rgb(32, 54, 82) } else { Color32::from_rgb(205, 228, 252) }
                     } else {
                         Color32::TRANSPARENT
@@ -156,8 +257,16 @@ impl FreeDataDietApp {
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
-                                let prefix = if is_startup { "[Startup]" } else { "*" };
-                                ui.label(RichText::new(prefix).monospace().small().color(if is_startup {
+                                let prefix = if is_multi_selected {
+                                    "[V]"
+                                } else if is_startup {
+                                    "[Startup]"
+                                } else {
+                                    "*"
+                                };
+                                ui.label(RichText::new(prefix).monospace().small().color(if is_multi_selected {
+                                    Color32::from_rgb(100, 200, 255)
+                                } else if is_startup {
                                     Color32::from_rgb(255, 200, 80)
                                 } else {
                                     Color32::GRAY
@@ -182,10 +291,25 @@ impl FreeDataDietApp {
                     let fav_click = ui
                         .interact(row_resp.rect, ui.scope_id().with(&loc.path), Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(format!("{} (Right-click for options)", loc.path.to_string_lossy()));
+                        .on_hover_text(format!("{} (Ctrl+click to multi-select, Right-click for options)", loc.path.to_string_lossy()));
 
                     if fav_click.clicked() && is_accessible {
-                        nav_target = Some(loc.path.clone());
+                        let ctrl = ui.input(|inp| inp.modifiers.ctrl || inp.modifiers.command);
+                        if ctrl {
+                            if self.selected_favorites.contains(&loc.path) {
+                                self.selected_favorites.remove(&loc.path);
+                            } else {
+                                self.selected_favorites.insert(loc.path.clone());
+                            }
+                            if self.selected_favorites.is_empty() {
+                                self.selected_favorites.insert(self.current_path.clone());
+                            }
+                            trigger_rescan = true;
+                        } else {
+                            self.selected_favorites.clear();
+                            self.selected_favorites.insert(loc.path.clone());
+                            nav_target = Some(loc.path.clone());
+                        }
                     }
 
                     fav_click.context_menu(|ui| {
@@ -222,44 +346,77 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 3. SCAN & DUPLICATE MODE ---
-                ui.label(RichText::new("Scan & Duplicate Mode").size(13.5).strong());
-                if ui
-                    .checkbox(&mut self.config.flatten_subfolders, "Recursive / Flatten Subfolders (F6)")
-                    .on_hover_text("Scan and flatten all files in all subfolders into one list")
-                    .changed()
-                {
+                // --- 3. INCLUDE SUBFOLDERS ---
+                ui.label(RichText::new("Include Subfolders").size(13.5).strong());
+                let is_f_0 = is_panel_focused && self.settings_nav_idx == 0;
+                let pill_flatten = setting_pill(
+                    ui,
+                    self.config.flatten_subfolders,
+                    is_f_0,
+                    "Include Subfolders",
+                    Some("F6"),
+                    show_sc,
+                    false,
+                    is_dark,
+                ).on_hover_text("Show all files and folders from current folder and all subfolders in one flat list");
+
+                if pill_flatten.clicked() || (is_f_0 && key_activate) {
+                    self.config.flatten_subfolders = !self.config.flatten_subfolders;
                     self.save_config();
                     trigger_rescan = true;
                 }
-                if ui
-                    .checkbox(&mut self.config.show_duplicates_only, "Find Duplicates View (Ctrl+D)")
-                    .on_hover_text("Group duplicate files across subfolders by size, name, timestamp, or SHA-256 hash")
-                    .changed()
-                {
+
+                ui.add_space(6.0);
+                ui.separator();
+
+                // --- 4. FIND DUPLICATES (PROMINENT ORANGE THEME) ---
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Duplicate Search").size(13.5).strong().color(Color32::from_rgb(255, 140, 0)));
+                });
+                let is_f_1 = is_panel_focused && self.settings_nav_idx == 1;
+                let pill_dup = setting_pill(
+                    ui,
+                    self.config.show_duplicates_only,
+                    is_f_1,
+                    "Find Duplicates View",
+                    Some("Ctrl+D"),
+                    show_sc,
+                    true,
+                    is_dark,
+                ).on_hover_text("Group duplicate files across folders by size, name, timestamp, or SHA-256 hash");
+
+                if pill_dup.clicked() || (is_f_1 && key_activate) {
+                    self.config.show_duplicates_only = !self.config.show_duplicates_only;
                     self.save_config();
                     trigger_rescan = true;
                 }
 
                 ui.add_space(4.0);
                 ui.label(RichText::new("Duplicate Matching Criteria:").weak().small());
+
                 let mut crit_changed = false;
-                if ui.checkbox(&mut self.config.duplicate_criteria.match_size, "Match same file size").changed() {
-                    crit_changed = true;
+                let criteria_items = [
+                    (2, "Match same file size", self.config.duplicate_criteria.match_size),
+                    (3, "Match same file name", self.config.duplicate_criteria.match_name),
+                    (4, "Match modification timestamp", self.config.duplicate_criteria.match_timestamp),
+                    (5, "Verify bit-exact SHA-256 hash", self.config.duplicate_criteria.verify_hash),
+                ];
+
+                for (idx, label, val) in criteria_items {
+                    let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                    let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
+                    if pill.clicked() || (is_f && key_activate) {
+                        match idx {
+                            2 => self.config.duplicate_criteria.match_size = !val,
+                            3 => self.config.duplicate_criteria.match_name = !val,
+                            4 => self.config.duplicate_criteria.match_timestamp = !val,
+                            5 => self.config.duplicate_criteria.verify_hash = !val,
+                            _ => {}
+                        }
+                        crit_changed = true;
+                    }
                 }
-                if ui.checkbox(&mut self.config.duplicate_criteria.match_name, "Match same file name").changed() {
-                    crit_changed = true;
-                }
-                if ui.checkbox(&mut self.config.duplicate_criteria.match_timestamp, "Match modification timestamp").changed() {
-                    crit_changed = true;
-                }
-                if ui
-                    .checkbox(&mut self.config.duplicate_criteria.verify_hash, "Verify bit-exact SHA-256 hash")
-                    .on_hover_text("Two-pass check: 4 KB prefix hash followed by 64 KB streaming SHA-256")
-                    .changed()
-                {
-                    crit_changed = true;
-                }
+
                 if crit_changed {
                     self.save_config();
                     if self.config.show_duplicates_only {
@@ -270,7 +427,7 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 4. CATEGORY FILTERS (WHAT'S SHOWN) ---
+                // --- 5. CATEGORY FILTERS (WHAT'S SHOWN) ---
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Category Filter (What's Shown)").size(13.5).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -284,38 +441,59 @@ impl FreeDataDietApp {
                         }
                     });
                 });
-                ui.horizontal_wrapped(|ui| {
-                    if ui.checkbox(&mut self.config.category_filters.show_images, "Images").changed() {
-                        self.save_config();
+                ui.add_space(2.0);
+
+                let mut cat_changed = false;
+                let cat_items = [
+                    (6, "Images", self.config.category_filters.show_images),
+                    (7, "Videos", self.config.category_filters.show_videos),
+                    (8, "Audio", self.config.category_filters.show_audio),
+                    (9, "Documents", self.config.category_filters.show_documents),
+                    (10, "Archives", self.config.category_filters.show_archives),
+                ];
+
+                for (idx, label, val) in cat_items {
+                    let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                    let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
+                    if pill.clicked() || (is_f && key_activate) {
+                        match idx {
+                            6 => self.config.category_filters.show_images = !val,
+                            7 => self.config.category_filters.show_videos = !val,
+                            8 => self.config.category_filters.show_audio = !val,
+                            9 => self.config.category_filters.show_documents = !val,
+                            10 => self.config.category_filters.show_archives = !val,
+                            _ => {}
+                        }
+                        cat_changed = true;
                     }
-                    if ui.checkbox(&mut self.config.category_filters.show_videos, "Videos").changed() {
-                        self.save_config();
-                    }
-                    if ui.checkbox(&mut self.config.category_filters.show_audio, "Audio").changed() {
-                        self.save_config();
-                    }
-                    if ui.checkbox(&mut self.config.category_filters.show_documents, "Documents").changed() {
-                        self.save_config();
-                    }
-                    if ui.checkbox(&mut self.config.category_filters.show_archives, "Archives").changed() {
-                        self.save_config();
-                    }
-                });
+                }
+
+                if cat_changed {
+                    self.save_config();
+                }
 
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 5. THEME & APPEARANCE (FROM 9d69210) ---
+                // --- 6. THEME & APPEARANCE ---
                 ui.label(RichText::new("Theme & Appearance").size(13.5).strong());
-                ui.horizontal(|ui| {
-                    for theme in [AppTheme::Dark, AppTheme::Light, AppTheme::System] {
-                        if ui.selectable_label(self.config.theme == theme, theme.label()).clicked() {
-                            self.config.theme = theme;
-                            self.save_config();
-                            ui.ctx().request_repaint();
-                        }
+                let theme_items = [
+                    (11, AppTheme::Dark, "Dark Mode"),
+                    (12, AppTheme::Light, "Light Mode"),
+                    (13, AppTheme::System, "System (Auto)"),
+                ];
+
+                for (idx, theme_opt, label) in theme_items {
+                    let is_active = self.config.theme == theme_opt;
+                    let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                    let pill = setting_pill(ui, is_active, is_f, label, None, false, false, is_dark);
+                    if pill.clicked() || (is_f && key_activate) {
+                        self.config.theme = theme_opt;
+                        self.save_config();
+                        ui.ctx().request_repaint();
                     }
-                });
+                }
+
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("UI Scale:");
@@ -335,23 +513,23 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 6. USAGE BAR SCALING (FROM 9d69210) ---
+                // --- 7. USAGE BAR SCALING ---
                 ui.label(RichText::new("Usage Bar Scaling").size(13.5).strong());
                 ui.label(RichText::new("Scale usage bars relative to:").weak().small());
                 ui.add_space(2.0);
 
-                for basis in [
-                    UsageBasis::LargestItem,
-                    UsageBasis::Folder,
-                    UsageBasis::DriveUsed,
-                    UsageBasis::DriveTotal,
-                ] {
+                let basis_items = [
+                    (14, UsageBasis::LargestItem, "Relative to largest item", "Largest item fills the bar; others scale proportionally."),
+                    (15, UsageBasis::Folder, "Current folder total", "Each item's share of this folder."),
+                    (16, UsageBasis::DriveUsed, "Used drive space", "Each item's share of all used space on the drive."),
+                    (17, UsageBasis::DriveTotal, "Total drive capacity", "Each item's share of the entire drive capacity."),
+                ];
+
+                for (idx, basis, label, desc) in basis_items {
                     let is_chosen = self.config.usage_basis == basis;
-                    if ui
-                        .selectable_label(is_chosen, RichText::new(basis.display_name()).strong())
-                        .on_hover_text(basis.description())
-                        .clicked()
-                    {
+                    let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                    let pill = setting_pill(ui, is_chosen, is_f, label, None, false, false, is_dark).on_hover_text(desc);
+                    if pill.clicked() || (is_f && key_activate) {
                         self.config.usage_basis = basis;
                         self.save_config();
                     }
@@ -360,17 +538,21 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 7. QUICK SEARCH (FROM 9d69210) ---
+                // --- 8. QUICK SEARCH ---
                 ui.label(RichText::new("Quick Search").size(13.5).strong());
                 ui.add_space(2.0);
 
                 let s_modes = [
-                    (QuickSearchMode::JumpToPrefix, "Jump to name (Explorer style)"),
-                    (QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot style)"),
-                    (QuickSearchMode::Disabled, "Disabled"),
+                    (18, QuickSearchMode::JumpToPrefix, "Jump to name (Explorer)", Some("F2")),
+                    (19, QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot)", Some("Ctrl+F")),
+                    (20, QuickSearchMode::Disabled, "Disabled", None),
                 ];
-                for (mode, label) in s_modes {
-                    if ui.selectable_label(self.config.quick_search_mode == mode, label).clicked() {
+
+                for (idx, mode, label, sc) in s_modes {
+                    let is_active = self.config.quick_search_mode == mode;
+                    let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                    let pill = setting_pill(ui, is_active, is_f, label, sc, show_sc, false, is_dark);
+                    if pill.clicked() || (is_f && key_activate) {
                         self.config.quick_search_mode = mode;
                         self.quick_search_buffer.clear();
                         self.save_config();
@@ -380,29 +562,28 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 8. FILE VISIBILITY (FROM 9d69210) ---
+                // --- 9. FILE VISIBILITY ---
                 ui.label(RichText::new("File Visibility").size(13.5).strong());
-                if ui
-                    .checkbox(&mut self.config.show_hidden_files, "Show Hidden Files (Ctrl+H)")
-                    .on_hover_text("Show hidden files and dotfiles")
-                    .changed()
-                {
+                let is_f_21 = is_panel_focused && self.settings_nav_idx == 21;
+                let pill_hidden = setting_pill(ui, self.config.show_hidden_files, is_f_21, "Show Hidden Files", Some("Ctrl+H"), show_sc, false, is_dark);
+                if pill_hidden.clicked() || (is_f_21 && key_activate) {
+                    self.config.show_hidden_files = !self.config.show_hidden_files;
                     self.save_config();
                     self.sort_entries();
                 }
-                if ui
-                    .checkbox(&mut self.config.show_system_files, "Show System Files & Links (Ctrl+Shift+H)")
-                    .on_hover_text("Show protected system files and directory links")
-                    .changed()
-                {
+
+                let is_f_22 = is_panel_focused && self.settings_nav_idx == 22;
+                let pill_sys = setting_pill(ui, self.config.show_system_files, is_f_22, "Show System Files & Links", Some("Ctrl+Shift+H"), show_sc, false, is_dark);
+                if pill_sys.clicked() || (is_f_22 && key_activate) {
+                    self.config.show_system_files = !self.config.show_system_files;
                     self.save_config();
                     self.sort_entries();
                 }
-                if ui
-                    .checkbox(&mut self.config.show_locked_folders, "Show Locked Folders")
-                    .on_hover_text("Show folders that cannot be scanned due to permission restrictions")
-                    .changed()
-                {
+
+                let is_f_23 = is_panel_focused && self.settings_nav_idx == 23;
+                let pill_lock = setting_pill(ui, self.config.show_locked_folders, is_f_23, "Show Locked Folders", None, false, false, is_dark);
+                if pill_lock.clicked() || (is_f_23 && key_activate) {
+                    self.config.show_locked_folders = !self.config.show_locked_folders;
                     self.save_config();
                     self.sort_entries();
                 }
@@ -410,12 +591,12 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 9. APPLICATION PREFERENCES (FROM 9d69210) ---
+                // --- 10. APPLICATION PREFERENCES ---
                 ui.label(RichText::new("Application Preferences").size(13.5).strong());
-                if ui
-                    .checkbox(&mut self.config.remember_last_path, "Remember last visited path on startup")
-                    .changed()
-                {
+                let is_f_24 = is_panel_focused && self.settings_nav_idx == 24;
+                let pill_rem = setting_pill(ui, self.config.remember_last_path, is_f_24, "Remember last visited path", None, false, false, is_dark);
+                if pill_rem.clicked() || (is_f_24 && key_activate) {
+                    self.config.remember_last_path = !self.config.remember_last_path;
                     if !self.config.remember_last_path {
                         self.config.last_path = None;
                     }
@@ -425,12 +606,12 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 10. DEVELOPER CACHE FILTER (FROM 9d69210) ---
+                // --- 11. DEVELOPER CACHE FILTER ---
                 ui.label(RichText::new("Developer Cache Filter").size(13.5).strong());
-                if ui
-                    .checkbox(&mut self.ignore_dev_caches, "Ignore dev caches (.git, node_modules, target, .cache, .venv)")
-                    .changed()
-                {
+                let is_f_25 = is_panel_focused && self.settings_nav_idx == 25;
+                let pill_dev = setting_pill(ui, self.ignore_dev_caches, is_f_25, "Ignore dev caches", None, false, false, is_dark);
+                if pill_dev.clicked() || (is_f_25 && key_activate) {
+                    self.ignore_dev_caches = !self.ignore_dev_caches;
                     self.config.ignore_dev_caches = self.ignore_dev_caches;
                     self.save_config();
                     trigger_rescan = true;
@@ -456,19 +637,45 @@ impl FreeDataDietApp {
                 ui.add_space(6.0);
                 ui.separator();
 
-                // --- 11. SHORTCUTS & FACTORY RESET ---
-                if ui.button("Configure Shortcuts & Hotkeys (F1)").clicked() {
+                // --- 12. SHORTCUTS DISPLAY TOGGLE & FACTORY RESET ---
+                ui.label(RichText::new("Settings Options").size(13.5).strong());
+                let is_f_26 = is_panel_focused && self.settings_nav_idx == 26;
+                let pill_sc_opt = setting_pill(ui, self.config.show_shortcuts_in_settings, is_f_26, "Show shortcuts in settings", None, false, false, is_dark);
+                if pill_sc_opt.clicked() || (is_f_26 && key_activate) {
+                    self.config.show_shortcuts_in_settings = !self.config.show_shortcuts_in_settings;
+                    self.save_config();
+                }
+
+                ui.add_space(4.0);
+                let is_f_27 = is_panel_focused && self.settings_nav_idx == 27;
+                let btn_sc = ui.button("Configure Shortcuts & Hotkeys (F1)");
+                if is_f_27 {
+                    ui.painter().rect_stroke(
+                        btn_sc.rect.expand(2.0),
+                        3.0,
+                        Stroke::new(1.5, Color32::from_rgb(100, 185, 255)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if btn_sc.clicked() || (is_f_27 && key_activate) {
                     self.show_shortcuts_modal = true;
                     self.shortcuts_just_opened = true;
                     self.shortcuts_selected_idx = 0;
                 }
 
                 ui.add_space(4.0);
+                let is_f_28 = is_panel_focused && self.settings_nav_idx == 28;
                 if !self.confirm_factory_reset {
-                    if ui
-                        .button(RichText::new("Reset All Settings to Defaults").color(Color32::from_rgb(255, 120, 120)))
-                        .clicked()
-                    {
+                    let btn_reset = ui.button(RichText::new("Reset All Settings to Defaults").color(Color32::from_rgb(255, 120, 120)));
+                    if is_f_28 {
+                        ui.painter().rect_stroke(
+                            btn_reset.rect.expand(2.0),
+                            3.0,
+                            Stroke::new(1.5, Color32::from_rgb(100, 185, 255)),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if btn_reset.clicked() || (is_f_28 && key_activate) {
                         self.confirm_factory_reset = true;
                     }
                 } else {

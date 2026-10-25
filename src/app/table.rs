@@ -370,7 +370,7 @@ impl FreeDataDietApp {
             let page_down = ui.input(|i| i.key_pressed(egui::Key::PageDown));
             let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
             let shift = ui.input(|i| i.modifiers.shift);
-            let context_key = ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
+            let context_key = ui.input(|i| i.key_pressed(egui::Key::Menu) || i.key_pressed(egui::Key::F10));
 
             // Quick Search handling
             match self.config.quick_search_mode {
@@ -379,10 +379,12 @@ impl FreeDataDietApp {
                         self.quick_search_buffer.clear();
                         self.filter_bar_active = false;
                     } else if key_backspace {
-                        if !self.quick_search_buffer.is_empty() {
-                            self.quick_search_buffer.pop();
+                        if self.filter_bar_active {
+                            if !self.quick_search_buffer.is_empty() {
+                                self.quick_search_buffer.pop();
+                            }
+                            // Do not navigate up when filter bar is active, even if empty
                         } else {
-                            self.filter_bar_active = false;
                             do_navigate_up = true;
                         }
                     } else if !typed_text.is_empty() {
@@ -444,7 +446,9 @@ impl FreeDataDietApp {
                 }
             }
 
-            if down && !visible_entries.is_empty() {
+            let is_main_focus = self.panel_focus == super::ActivePanelFocus::MainView;
+
+            if is_main_focus && down && !visible_entries.is_empty() {
                 let next = match selected_visible_idx {
                     Some(idx) => (idx + 1).min(visible_entries.len().saturating_sub(1)),
                     None => 0,
@@ -453,7 +457,7 @@ impl FreeDataDietApp {
                 scroll_to_selected = true;
             }
 
-            if up && !visible_entries.is_empty() {
+            if is_main_focus && up && !visible_entries.is_empty() {
                 let prev = match selected_visible_idx {
                     Some(idx) => idx.saturating_sub(1),
                     None => 0,
@@ -462,31 +466,31 @@ impl FreeDataDietApp {
                 scroll_to_selected = true;
             }
 
-            if home && !visible_entries.is_empty() {
+            if is_main_focus && home && !visible_entries.is_empty() {
                 self.selected_path = Some(visible_entries[0].1.path.clone());
                 scroll_to_selected = true;
             }
 
-            if end && !visible_entries.is_empty() {
+            if is_main_focus && end && !visible_entries.is_empty() {
                 self.selected_path = Some(visible_entries.last().unwrap().1.path.clone());
                 scroll_to_selected = true;
             }
 
-            if page_up && !visible_entries.is_empty() {
+            if is_main_focus && page_up && !visible_entries.is_empty() {
                 let curr = selected_visible_idx.unwrap_or(0);
                 let target = curr.saturating_sub(15);
                 self.selected_path = Some(visible_entries[target].1.path.clone());
                 scroll_to_selected = true;
             }
 
-            if page_down && !visible_entries.is_empty() {
+            if is_main_focus && page_down && !visible_entries.is_empty() {
                 let curr = selected_visible_idx.unwrap_or(0);
                 let target = (curr + 15).min(visible_entries.len().saturating_sub(1));
                 self.selected_path = Some(visible_entries[target].1.path.clone());
                 scroll_to_selected = true;
             }
 
-            if enter {
+            if is_main_focus && enter {
                 if let Some(vidx) = selected_visible_idx {
                     let entry = visible_entries[vidx].1;
                     if entry.is_dir {
@@ -497,7 +501,7 @@ impl FreeDataDietApp {
                 }
             }
 
-            if right {
+            if is_main_focus && right {
                 if let Some(vidx) = selected_visible_idx {
                     let entry = visible_entries[vidx].1;
                     if entry.is_dir {
@@ -506,7 +510,7 @@ impl FreeDataDietApp {
                 }
             }
 
-            if del {
+            if is_main_focus && del {
                 if let Some(vidx) = selected_visible_idx {
                     let can_delete = if shift {
                         self.config.shortcuts.shift_del_permanent
@@ -530,7 +534,7 @@ impl FreeDataDietApp {
                 }
             }
 
-            if context_key && selected_visible_idx.is_some() {
+            if is_main_focus && context_key && selected_visible_idx.is_some() {
                 let entry = visible_entries[selected_visible_idx.unwrap()].1;
                 open_context_menu = Some(ActiveContextMenu {
                     path: entry.path.clone(),
