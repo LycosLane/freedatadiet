@@ -10,7 +10,7 @@ pub enum DeleteModalFocus {
     Cancel,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeleteConfirmState {
     None,
     Single {

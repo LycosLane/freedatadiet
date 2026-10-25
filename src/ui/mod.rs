@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use eframe::egui::{self, Panel};
 
-use crate::config::{AppConfig, AppTheme, ColumnId, QuickSearchMode};
+use crate::config::{AppConfig, AppTheme, ColumnId, QuickSearchMode, UsageBasis};
 use crate::duplicate::{DuplicateCluster, DuplicateEngine, DuplicateSuggestion};
 use crate::locations::LocationManager;
 use crate::model::{DriveInfo, FileCategory, FileEntry, SortDirection};
@@ -27,10 +27,9 @@ use self::filter_strip::render_filter_strip;
 use self::modals::delete_dialog::{
     render_delete_dialog, DeleteConfirmState, DeleteModalFocus,
 };
-use self::modals::settings_dialog::{render_settings_dialog, SettingsDialogState};
 use self::modals::shortcuts_dialog::render_shortcuts_dialog;
 use self::modals::update_dialog::render_update_dialog;
-use self::sidebar::render_sidebar;
+use self::sidebar::{render_sidebar, SidebarTab};
 use self::status_bar::render_status_bar;
 use self::table::render_file_table;
 use self::top_bar::render_top_bar;
@@ -44,11 +43,16 @@ pub struct FreeDataDietApp {
     pub entries: Vec<FileEntry>,
     pub duplicate_clusters: Vec<DuplicateCluster>,
     pub selected_paths: HashSet<PathBuf>,
-    pub focused_idx: Option<usize>,
+    pub selected_path: Option<PathBuf>,
+    pub scroll_to_selected: bool,
 
-    // Search and Filters
-    pub search_query: String,
+    // Keyboard Search
+    pub quick_search_buffer: String,
+    pub quick_search_time: Option<Instant>,
     pub filter_bar_active: bool,
+
+    // Sidebar & Assistant
+    pub sidebar_tab: SidebarTab,
     pub active_suggestion: Option<DuplicateSuggestion>,
     pub safety_warning: Option<String>,
 
@@ -62,8 +66,6 @@ pub struct FreeDataDietApp {
     // Modals
     pub delete_modal: DeleteConfirmState,
     pub delete_focus: DeleteModalFocus,
-    pub show_settings_modal: bool,
-    pub settings_state: SettingsDialogState,
     pub show_shortcuts_modal: bool,
     pub show_update_modal: bool,
 
@@ -99,9 +101,12 @@ impl FreeDataDietApp {
             entries: Vec::new(),
             duplicate_clusters: Vec::new(),
             selected_paths: HashSet::new(),
-            focused_idx: None,
-            search_query: String::new(),
+            selected_path: None,
+            scroll_to_selected: false,
+            quick_search_buffer: String::new(),
+            quick_search_time: None,
             filter_bar_active: false,
+            sidebar_tab: SidebarTab::Explorer,
             active_suggestion: None,
             safety_warning: None,
             scanner: None,
@@ -111,8 +116,6 @@ impl FreeDataDietApp {
             error_message: None,
             delete_modal: DeleteConfirmState::None,
             delete_focus: DeleteModalFocus::Trash,
-            show_settings_modal: false,
-            settings_state: SettingsDialogState::default(),
             show_shortcuts_modal: false,
             show_update_modal: false,
             status_toast: None,
@@ -135,7 +138,7 @@ impl FreeDataDietApp {
         self.entries.clear();
         self.duplicate_clusters.clear();
         self.selected_paths.clear();
-        self.focused_idx = None;
+        self.selected_path = None;
         self.active_suggestion = None;
         self.safety_warning = None;
         self.summary = None;
@@ -162,7 +165,7 @@ impl FreeDataDietApp {
 
     pub fn navigate_to(&mut self, path: PathBuf) {
         if path.is_dir() {
-            self.search_query.clear();
+            self.quick_search_buffer.clear();
             self.filter_bar_active = false;
             self.current_path = path;
             if self.config.remember_last_path {
@@ -287,9 +290,46 @@ impl FreeDataDietApp {
         }
     }
 
+    fn calculate_base_size(&self) -> f64 {
+        match self.config.usage_basis {
+            UsageBasis::LargestItem => {
+                let max_size = self.entries.iter().map(|e| e.size).max().unwrap_or(0);
+                if max_size > 0 { max_size as f64 } else { 1.0 }
+            }
+            UsageBasis::Folder => {
+                let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                if sum > 0 { sum as f64 } else { 1.0 }
+            }
+            UsageBasis::DriveUsed => {
+                let drive = self.drives.iter().find(|d| self.current_path.starts_with(&d.path));
+                let used = drive.map(|d| d.used_space()).unwrap_or(0);
+                if used > 0 {
+                    used as f64
+                } else {
+                    let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                    sum.max(1) as f64
+                }
+            }
+            UsageBasis::DriveTotal => {
+                let drive = self.drives.iter().find(|d| self.current_path.starts_with(&d.path));
+                let total = drive.map(|d| d.total_space).unwrap_or(0);
+                if total > 0 {
+                    total as f64
+                } else {
+                    let sum: u64 = self.entries.iter().map(|e| e.size).sum();
+                    sum.max(1) as f64
+                }
+            }
+        }
+    }
+
     fn filter_visible_entries(&self) -> Vec<FileEntry> {
-        let query = self.search_query.trim().to_lowercase();
         let cats = &self.config.category_filters;
+        let live_filter_query = if self.config.quick_search_mode == QuickSearchMode::LiveFilter {
+            self.quick_search_buffer.trim().to_lowercase()
+        } else {
+            String::new()
+        };
 
         self.entries
             .iter()
@@ -315,14 +355,8 @@ impl FreeDataDietApp {
                     }
                 }
 
-                if !query.is_empty() {
-                    let matches_name = e.name.to_lowercase().contains(&query);
-                    let matches_ext = e
-                        .path
-                        .extension()
-                        .map(|ext| ext.to_string_lossy().to_lowercase().contains(&query))
-                        .unwrap_or(false);
-                    if !matches_name && !matches_ext {
+                if !live_filter_query.is_empty() {
+                    if !e.name.to_lowercase().contains(&live_filter_query) {
                         return false;
                     }
                 }
@@ -360,6 +394,7 @@ impl FreeDataDietApp {
         }
 
         self.selected_paths.clear();
+        self.selected_path = None;
         self.status_toast = Some((
             format!("Deleted {} items ({} skipped)", deleted, skipped),
             Instant::now(),
@@ -367,13 +402,24 @@ impl FreeDataDietApp {
         self.trigger_scan();
     }
 
-    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let input = ctx.input(|i| i.clone());
+    fn handle_keyboard_inputs(&mut self, ui: &mut egui::Ui, visible_entries: &[FileEntry]) {
+        let wants_keyboard = ui.ctx().egui_wants_keyboard_input();
+        let in_modal = self.delete_modal != DeleteConfirmState::None
+            || self.show_shortcuts_modal
+            || self.show_update_modal;
 
-        if input.key_pressed(egui::Key::F1) {
+        // Global shortcuts (F1-F12, Ctrl combinations)
+        let f1 = ui.input(|i| i.key_pressed(egui::Key::F1));
+        let f2 = ui.input(|i| i.key_pressed(egui::Key::F2));
+        let f4 = ui.input(|i| i.key_pressed(egui::Key::F4));
+        let f5 = ui.input(|i| i.key_pressed(egui::Key::F5));
+        let f6 = ui.input(|i| i.key_pressed(egui::Key::F6));
+        let f12 = ui.input(|i| i.key_pressed(egui::Key::F12) || ((i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Comma)));
+
+        if f1 {
             self.show_shortcuts_modal = true;
         }
-        if input.key_pressed(egui::Key::F2) {
+        if f2 {
             self.config.quick_search_mode = match self.config.quick_search_mode {
                 QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
                 QuickSearchMode::LiveFilter => QuickSearchMode::Disabled,
@@ -381,25 +427,29 @@ impl FreeDataDietApp {
             };
             let _ = self.config.save();
         }
-        if input.key_pressed(egui::Key::F4) {
+        if f4 {
             self.config.show_sidebar = !self.config.show_sidebar;
             let _ = self.config.save();
         }
-        if input.key_pressed(egui::Key::F5) {
+        if f5 {
             self.trigger_scan();
         }
-        if input.key_pressed(egui::Key::F6) {
+        if f6 {
             self.config.flatten_subfolders = !self.config.flatten_subfolders;
             let _ = self.config.save();
             self.trigger_scan();
         }
-        if input.key_pressed(egui::Key::F12) || (input.modifiers.command && input.key_pressed(egui::Key::Comma)) {
-            self.show_settings_modal = true;
+        if f12 {
+            self.sidebar_tab = SidebarTab::Settings;
+            self.config.show_sidebar = true;
+            let _ = self.config.save();
         }
 
-        if input.modifiers.command && input.key_pressed(egui::Key::D) {
-            if input.modifiers.shift {
-                // Ctrl+Shift+D: Apply duplicate assistant suggestion
+        let ctrl_d = ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::D));
+        let shift = ui.input(|i| i.modifiers.shift);
+        if ctrl_d {
+            if shift {
+                // Apply duplicate assistant suggestion
                 if let Some(sugg) = &self.active_suggestion {
                     for p in &sugg.candidate_paths {
                         self.selected_paths.insert(p.clone());
@@ -407,54 +457,280 @@ impl FreeDataDietApp {
                     self.update_duplicate_assistant();
                 }
             } else {
-                // Ctrl+D: Toggle duplicates mode
+                // Toggle duplicates view
                 self.config.show_duplicates_only = !self.config.show_duplicates_only;
                 let _ = self.config.save();
                 self.trigger_scan();
             }
         }
 
-        if input.modifiers.command && input.key_pressed(egui::Key::B) {
+        let ctrl_b = ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::B));
+        if ctrl_b {
             LocationManager::add_location(&mut self.config, self.current_path.clone(), None);
             self.status_toast = Some(("Added current folder to Favorites".into(), Instant::now()));
         }
 
-        if input.modifiers.command && input.key_pressed(egui::Key::A) {
-            for e in self.filter_visible_entries() {
-                self.selected_paths.insert(e.path);
+        let ctrl_a = ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::A));
+        if ctrl_a && !wants_keyboard {
+            for e in visible_entries {
+                self.selected_paths.insert(e.path.clone());
             }
         }
 
-        if input.key_pressed(egui::Key::Escape) {
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape {
             if !self.selected_paths.is_empty() {
                 self.selected_paths.clear();
             }
+            if !self.quick_search_buffer.is_empty() {
+                self.quick_search_buffer.clear();
+                self.filter_bar_active = false;
+            }
             self.delete_modal = DeleteConfirmState::None;
-            self.show_settings_modal = false;
             self.show_shortcuts_modal = false;
             self.show_update_modal = false;
         }
 
-        if input.key_pressed(egui::Key::Delete) {
-            if !self.selected_paths.is_empty() {
-                let paths: Vec<PathBuf> = self.selected_paths.iter().cloned().collect();
-                let total_size: u64 = self
-                    .entries
-                    .iter()
-                    .filter(|e| self.selected_paths.contains(&e.path))
-                    .map(|e| e.size)
-                    .sum();
-                let has_protected = self
-                    .entries
-                    .iter()
-                    .any(|e| self.selected_paths.contains(&e.path) && e.is_system_protected);
+        // Table & Search Keyboard Navigation (active when not in text input or modals)
+        if !wants_keyboard && !in_modal {
+            let mut selected_visible_idx = self.selected_path.as_ref().and_then(|p| {
+                visible_entries.iter().position(|e| &e.path == p)
+            });
 
-                self.delete_modal = DeleteConfirmState::Batch {
-                    paths,
-                    total_size,
-                    total_count: self.selected_paths.len(),
-                    has_protected,
+            if selected_visible_idx.is_none() && !visible_entries.is_empty() && self.config.quick_search_mode == QuickSearchMode::LiveFilter && !self.quick_search_buffer.is_empty() {
+                self.selected_path = Some(visible_entries[0].path.clone());
+                selected_visible_idx = Some(0);
+            }
+
+            let (typed_text, key_backspace, key_escape) = ui.input(|i| {
+                let mut text = String::new();
+                let mut bs = false;
+                let mut esc = false;
+                for event in &i.events {
+                    match event {
+                        egui::Event::Text(t) => {
+                            if !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command {
+                                for ch in t.chars() {
+                                    if !ch.is_control() {
+                                        text.push(ch);
+                                    }
+                                }
+                            }
+                        }
+                        egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                            bs = true;
+                        }
+                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => {
+                            esc = true;
+                        }
+                        _ => {}
+                    }
+                }
+                (text, bs, esc)
+            });
+
+            let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+            let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let arrow_left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let home = ui.input(|i| i.key_pressed(egui::Key::Home));
+            let end = ui.input(|i| i.key_pressed(egui::Key::End));
+            let page_up = ui.input(|i| i.key_pressed(egui::Key::PageUp));
+            let page_down = ui.input(|i| i.key_pressed(egui::Key::PageDown));
+            let space = ui.input(|i| i.key_pressed(egui::Key::Space));
+            let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
+
+            // Quick Search processing
+            match self.config.quick_search_mode {
+                QuickSearchMode::LiveFilter => {
+                    if key_escape {
+                        self.quick_search_buffer.clear();
+                        self.filter_bar_active = false;
+                    } else if key_backspace {
+                        if !self.quick_search_buffer.is_empty() {
+                            self.quick_search_buffer.pop();
+                        } else {
+                            self.filter_bar_active = false;
+                            self.navigate_up();
+                        }
+                    } else if !typed_text.is_empty() {
+                        self.quick_search_buffer.push_str(&typed_text);
+                        self.filter_bar_active = true;
+                        self.scroll_to_selected = true;
+                    }
+                    if arrow_left {
+                        self.navigate_up();
+                    }
+                }
+                QuickSearchMode::JumpToPrefix => {
+                    if key_escape {
+                        self.quick_search_buffer.clear();
+                        self.quick_search_time = None;
+                    } else if key_backspace || arrow_left {
+                        self.navigate_up();
+                    } else if !typed_text.is_empty() {
+                        let now = Instant::now();
+                        let timed_out = match self.quick_search_time {
+                            Some(t) => now.duration_since(t) > std::time::Duration::from_millis(1000),
+                            None => true,
+                        };
+                        if timed_out {
+                            self.quick_search_buffer.clear();
+                        }
+                        self.quick_search_time = Some(now);
+
+                        for ch in typed_text.chars() {
+                            let ch_lower = ch.to_lowercase().to_string();
+                            if self.quick_search_buffer.len() == 1 && self.quick_search_buffer.to_lowercase() == ch_lower {
+                                let start_idx = match selected_visible_idx {
+                                    Some(curr) => (curr + 1) % visible_entries.len().max(1),
+                                    None => 0,
+                                };
+                                let found = visible_entries.iter().skip(start_idx)
+                                    .chain(visible_entries.iter().take(start_idx))
+                                    .find(|e| e.name.to_lowercase().starts_with(&ch_lower));
+                                if let Some(entry) = found {
+                                    self.selected_path = Some(entry.path.clone());
+                                    self.scroll_to_selected = true;
+                                }
+                            } else {
+                                self.quick_search_buffer.push(ch);
+                                let query = self.quick_search_buffer.to_lowercase();
+                                if let Some(entry) = visible_entries.iter().find(|e| e.name.to_lowercase().starts_with(&query)) {
+                                    self.selected_path = Some(entry.path.clone());
+                                    self.scroll_to_selected = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                QuickSearchMode::Disabled => {
+                    if key_backspace || arrow_left {
+                        self.navigate_up();
+                    }
+                }
+            }
+
+            // Arrow down
+            if down && !visible_entries.is_empty() {
+                let next = match selected_visible_idx {
+                    Some(idx) => (idx + 1).min(visible_entries.len().saturating_sub(1)),
+                    None => 0,
                 };
+                self.selected_path = Some(visible_entries[next].path.clone());
+                self.scroll_to_selected = true;
+            }
+
+            // Arrow up
+            if up && !visible_entries.is_empty() {
+                let prev = match selected_visible_idx {
+                    Some(idx) => idx.saturating_sub(1),
+                    None => 0,
+                };
+                self.selected_path = Some(visible_entries[prev].path.clone());
+                self.scroll_to_selected = true;
+            }
+
+            // Home / End
+            if home && !visible_entries.is_empty() {
+                self.selected_path = Some(visible_entries[0].path.clone());
+                self.scroll_to_selected = true;
+            }
+            if end && !visible_entries.is_empty() {
+                self.selected_path = Some(visible_entries.last().unwrap().path.clone());
+                self.scroll_to_selected = true;
+            }
+
+            // Page Up / Down
+            if page_up && !visible_entries.is_empty() {
+                let curr = selected_visible_idx.unwrap_or(0);
+                let target = curr.saturating_sub(15);
+                self.selected_path = Some(visible_entries[target].path.clone());
+                self.scroll_to_selected = true;
+            }
+            if page_down && !visible_entries.is_empty() {
+                let curr = selected_visible_idx.unwrap_or(0);
+                let target = (curr + 15).min(visible_entries.len().saturating_sub(1));
+                self.selected_path = Some(visible_entries[target].path.clone());
+                self.scroll_to_selected = true;
+            }
+
+            // Enter / Right (Navigate folder or open file)
+            if enter || right {
+                if let Some(vidx) = selected_visible_idx {
+                    let entry = &visible_entries[vidx];
+                    if entry.is_dir {
+                        self.navigate_to(entry.path.clone());
+                    } else if enter {
+                        let _ = platform::open_file(&entry.path);
+                    }
+                }
+            }
+
+            // Space (Toggle checkbox selection)
+            if space {
+                if let Some(vidx) = selected_visible_idx {
+                    let p = &visible_entries[vidx].path;
+                    if self.selected_paths.contains(p) {
+                        self.selected_paths.remove(p);
+                    } else {
+                        self.selected_paths.insert(p.clone());
+                    }
+                }
+            }
+
+            // Delete (Recycle Bin vs Permanent)
+            if del {
+                let can_delete = if shift {
+                    self.config.shortcuts.shift_del_permanent
+                } else {
+                    self.config.shortcuts.del_trash
+                };
+
+                if can_delete {
+                    if !self.selected_paths.is_empty() {
+                        let paths: Vec<PathBuf> = self.selected_paths.iter().cloned().collect();
+                        let total_size: u64 = self
+                            .entries
+                            .iter()
+                            .filter(|e| self.selected_paths.contains(&e.path))
+                            .map(|e| e.size)
+                            .sum();
+                        let has_protected = self
+                            .entries
+                            .iter()
+                            .any(|e| self.selected_paths.contains(&e.path) && e.is_system_protected);
+
+                        self.delete_modal = DeleteConfirmState::Batch {
+                            paths,
+                            total_size,
+                            total_count: self.selected_paths.len(),
+                            has_protected,
+                        };
+                        self.delete_focus = if shift {
+                            DeleteModalFocus::Permanent
+                        } else {
+                            DeleteModalFocus::Trash
+                        };
+                    } else if let Some(vidx) = selected_visible_idx {
+                        let entry = &visible_entries[vidx];
+                        self.delete_modal = DeleteConfirmState::Single {
+                            path: entry.path.clone(),
+                            name: entry.name.clone(),
+                            is_dir: entry.is_dir,
+                            size: entry.size,
+                            allocated_size: entry.allocated_size,
+                            item_count: entry.item_count,
+                            is_protected: entry.is_system_protected,
+                        };
+                        self.delete_focus = if shift {
+                            DeleteModalFocus::Permanent
+                        } else {
+                            DeleteModalFocus::Trash
+                        };
+                    }
+                }
             }
         }
     }
@@ -464,7 +740,9 @@ impl eframe::App for FreeDataDietApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.check_scanner_messages();
-        self.handle_keyboard_shortcuts(&ctx);
+
+        let visible_entries = self.filter_visible_entries();
+        self.handle_keyboard_inputs(ui, &visible_entries);
 
         let is_dark = match self.config.theme {
             AppTheme::Dark => true,
@@ -506,7 +784,9 @@ impl eframe::App for FreeDataDietApp {
                 self.trigger_scan();
             }
             if top_action.open_settings {
-                self.show_settings_modal = true;
+                self.sidebar_tab = SidebarTab::Settings;
+                self.config.show_sidebar = true;
+                let _ = self.config.save();
             }
             if top_action.open_update_modal {
                 self.show_update_modal = true;
@@ -524,7 +804,7 @@ impl eframe::App for FreeDataDietApp {
             let filter_action = render_filter_strip(
                 ui,
                 &mut self.config,
-                &mut self.search_query,
+                &mut self.quick_search_buffer,
                 &mut self.filter_bar_active,
                 is_dark,
             );
@@ -541,6 +821,7 @@ impl eframe::App for FreeDataDietApp {
                 let side_action = render_sidebar(
                     ui,
                     &mut self.config,
+                    &mut self.sidebar_tab,
                     &self.drives,
                     &self.current_path,
                     &self.location_mgr,
@@ -556,6 +837,12 @@ impl eframe::App for FreeDataDietApp {
                 }
                 if side_action.rescan_needed {
                     self.trigger_scan();
+                }
+                if side_action.recompute_duplicates {
+                    self.compute_duplicates();
+                }
+                if side_action.open_shortcuts_modal {
+                    self.show_shortcuts_modal = true;
                 }
             });
         }
@@ -632,14 +919,18 @@ impl eframe::App for FreeDataDietApp {
 
         // --- CENTRAL PANEL: TABLE ---
         egui::CentralPanel::default().show(ui, |ui| {
-            let visible_entries = self.filter_visible_entries();
+            let base_size = self.calculate_base_size();
             let table_action = render_file_table(
                 ui,
                 &mut self.config,
                 &visible_entries,
                 &mut self.duplicate_clusters,
                 &mut self.selected_paths,
-                &mut self.focused_idx,
+                &mut self.selected_path,
+                self.scroll_to_selected,
+                &self.quick_search_buffer,
+                self.filter_bar_active,
+                base_size,
                 is_dark,
             );
 
@@ -675,7 +966,14 @@ impl eframe::App for FreeDataDietApp {
             if let Some(warn) = table_action.safety_warning {
                 self.safety_warning = Some(warn);
             }
+            if table_action.clear_live_filter {
+                self.quick_search_buffer.clear();
+                self.filter_bar_active = false;
+            }
         });
+
+        // Reset one-shot scroll flag after table consumes it
+        self.scroll_to_selected = false;
 
         // --- MODALS ---
         if let Some(act) = render_delete_dialog(&ctx, &self.delete_modal, &mut self.delete_focus) {
@@ -711,13 +1009,6 @@ impl eframe::App for FreeDataDietApp {
                 self.delete_modal = DeleteConfirmState::None;
             }
         }
-
-        render_settings_dialog(
-            &ctx,
-            &mut self.config,
-            &mut self.settings_state,
-            &mut self.show_settings_modal,
-        );
 
         render_shortcuts_dialog(&ctx, &mut self.show_shortcuts_modal);
         render_update_dialog(&ctx, &mut self.updater, &mut self.show_update_modal);
