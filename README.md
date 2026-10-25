@@ -21,10 +21,10 @@ Pre-compiled, self-contained release packages are published on the **[Releases](
   ```cmd
   winget install freedatadiet
   ```
-* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. No installer required—double-click and run.
+* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. No installer required: double-click and run.
 
 ### Linux
-* **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS — Recommended):**  
+* **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS - Recommended):**  
   ```bash
   # 1. Add GPG signing key
   curl -fsSL https://lycoslane.github.io/freedatadiet/pubkey.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/freedatadiet.gpg
@@ -146,6 +146,13 @@ cargo build --release
 # Run
 ./target/release/freedatadiet
 ```
+
+---
+
+## Related Projects
+
+* **[FreeDataDiet Mobile](https://github.com/LycosLane/freedatadiet-mobile):** Android companion app for disk analysis and app-cache management.
+* **[Brand Guidelines](BRANDING.md):** Official White Fedora mark specifications, vector assets, and color palette.
 
 ---
 

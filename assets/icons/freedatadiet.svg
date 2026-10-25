@@ -1,37 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1e222b"/>
-      <stop offset="100%" stop-color="#0f1115"/>
-    </linearGradient>
-    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#64c8ff"/>
-      <stop offset="100%" stop-color="#007acc"/>
-    </linearGradient>
-    <linearGradient id="amberGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffb347"/>
-      <stop offset="100%" stop-color="#ff7b00"/>
-    </linearGradient>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#101216"/>
+  
+  <g transform="translate(256, 256) scale(1.26) translate(-256, -260) rotate(-6 256 256)">
+    <!-- Crown -->
+    <path d="M 162 252
+             L 186 162
+             L 208 150
+             L 256 196
+             L 304 150
+             L 326 162
+             L 350 252
+             Q 256 264 162 252 Z" fill="#FFFFFF"/>
+    <path d="M 220 154 L 256 165 L 292 154 L 256 186 Z" fill="#FFFFFF"/>
 
-  <!-- Squircle Base -->
-  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#bg)" stroke="#2d3340" stroke-width="4"/>
+    <!-- Modular Two-Tone Hatband (Cyan Active Storage + Amber Diet Slice) -->
+    <path d="M 159 264
+             Q 232 273 300 269
+             L 305 305
+             Q 234 310 151 300 Z" fill="#00B4FF"/>
+    <path d="M 315 268
+             Q 334 266 353 264
+             L 361 300
+             Q 342 303 320 305 Z" fill="#FFB020"/>
 
-  <!-- Outer Disk Storage Ring Track -->
-  <circle cx="128" cy="128" r="82" fill="none" stroke="#252b36" stroke-width="14"/>
-
-  <!-- Active Usage Segment (Cyan - Lean fast data) -->
-  <circle cx="128" cy="128" r="82" fill="none" stroke="url(#cyanGrad)" stroke-width="14"
-          stroke-dasharray="360 515" stroke-dashoffset="130" stroke-linecap="round"/>
-
-  <!-- Trimming Highlight Segment (Amber - Diet / Trimmed bloat) -->
-  <circle cx="128" cy="128" r="82" fill="none" stroke="url(#amberGrad)" stroke-width="14"
-          stroke-dasharray="90 515" stroke-dashoffset="-240" stroke-linecap="round"/>
-
-  <!-- Center Disk Hub -->
-  <circle cx="128" cy="128" r="44" fill="#181c24" stroke="#373e4d" stroke-width="4"/>
-  <circle cx="128" cy="128" r="16" fill="url(#cyanGrad)"/>
-
-  <!-- Center Lightning Bolt (Fast & Lean) -->
-  <path d="M132 104 L118 126 L127 126 L124 152 L140 128 L130 128 Z" fill="#ffffff" opacity="0.95"/>
+    <!-- Brim -->
+    <path d="M 86 312
+             L 150 312
+             Q 256 326 362 312
+             L 426 312
+             C 394 362, 330 384, 256 384
+             C 182 384, 118 362, 86 312 Z" fill="#FFFFFF"/>
+  </g>
 </svg>
