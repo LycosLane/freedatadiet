@@ -151,21 +151,76 @@ impl DuplicateEngine {
             return Vec::new();
         }
 
-        // Pass 0: Group by criteria keys (size, name, timestamp)
-        let mut initial_clusters: HashMap<String, Vec<&FileEntry>> = HashMap::new();
-        for file in files {
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
+        // Stage 1: Partition by file size (u64) if match_size is enabled
+        let size_groups: Vec<Vec<&FileEntry>> = if criteria.match_size {
+            let mut size_map: HashMap<u64, Vec<&FileEntry>> = HashMap::new();
+            for file in files {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+                size_map.entry(file.size).or_default().push(file);
             }
-            if let Some(key) = Self::build_key(file, &criteria) {
-                initial_clusters.entry(key).or_default().push(file);
-            }
+            size_map.into_values().filter(|g| g.len() >= 2).collect()
+        } else {
+            vec![files]
+        };
+
+        if size_groups.is_empty() {
+            return Vec::new();
         }
+
+        // Stage 2: Sub-partition by case-insensitive name if match_name is enabled
+        let name_groups: Vec<Vec<&FileEntry>> = if criteria.match_name {
+            let mut result = Vec::new();
+            for group in size_groups {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+                let mut name_map: HashMap<String, Vec<&FileEntry>> = HashMap::new();
+                for file in group {
+                    name_map.entry(file.name.to_lowercase()).or_default().push(file);
+                }
+                for (_, sub) in name_map {
+                    if sub.len() >= 2 {
+                        result.push(sub);
+                    }
+                }
+            }
+            result
+        } else {
+            size_groups
+        };
+
+        if name_groups.is_empty() {
+            return Vec::new();
+        }
+
+        // Stage 3: Sub-partition by modification timestamp if match_timestamp is enabled
+        let metadata_groups: Vec<Vec<&FileEntry>> = if criteria.match_timestamp {
+            let mut result = Vec::new();
+            for group in name_groups {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+                let mut time_map: HashMap<Option<SystemTime>, Vec<&FileEntry>> = HashMap::new();
+                for file in group {
+                    time_map.entry(file.modified).or_default().push(file);
+                }
+                for (_, sub) in time_map {
+                    if sub.len() >= 2 {
+                        result.push(sub);
+                    }
+                }
+            }
+            result
+        } else {
+            name_groups
+        };
 
         let mut clusters = Vec::new();
         let mut cluster_idx = 1;
 
-        for (_key, group) in initial_clusters {
+        for group in metadata_groups {
             if cancel_flag.load(Ordering::Relaxed) {
                 return Vec::new();
             }
@@ -174,7 +229,6 @@ impl DuplicateEngine {
             }
 
             if !criteria.verify_hash {
-                // Return metadata-matched duplicates directly
                 let cluster = Self::build_cluster_from_group(
                     format!("cluster_{cluster_idx}"),
                     &group,
@@ -209,7 +263,6 @@ impl DuplicateEngine {
                         return Vec::new();
                     }
                     if file.size <= PREFIX_HASH_LEN as u64 {
-                        // Prefix is already the entire file
                         full_hash_map.entry(prefix_hash).or_default().push(file);
                     } else if let Ok(Some(full_hash)) =
                         Self::hash_full_file(&file.path, file.size, cancel_flag)
@@ -234,32 +287,6 @@ impl DuplicateEngine {
 
         clusters.sort_by(|a, b| b.wasted_bytes().cmp(&a.wasted_bytes()));
         clusters
-    }
-
-    fn build_key(file: &FileEntry, criteria: &DuplicateCriteriaConfig) -> Option<String> {
-        let mut parts = Vec::new();
-        if criteria.match_size {
-            parts.push(format!("S:{}", file.size));
-        }
-        if criteria.match_name {
-            parts.push(format!("N:{}", file.name.to_lowercase()));
-        }
-        if criteria.match_timestamp {
-            if let Some(m) = file.modified {
-                if let Ok(dur) = m.duration_since(SystemTime::UNIX_EPOCH) {
-                    parts.push(format!("T:{}", dur.as_secs()));
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
-            }
-        }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("|"))
-        }
     }
 
     fn hash_prefix(path: &Path, cancel: &AtomicBool) -> std::io::Result<Option<[u8; 32]>> {

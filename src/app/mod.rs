@@ -49,6 +49,21 @@ pub struct FreeDataDietApp {
     pub(super) active_suggestion: Option<DuplicateSuggestion>,
     pub(super) safety_warning: Option<(String, Option<PathBuf>)>,
     pub(super) cancel_duplicate_hashing: Arc<AtomicBool>,
+    pub(super) is_finding_duplicates: bool,
+    pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<Vec<DuplicateCluster>>>,
+    pub(super) duplicate_total_wasted: u64,
+    pub(super) duplicate_eligible_count: usize,
+    pub(super) duplicate_eligible_bytes: u64,
+    pub(super) duplicate_blocked_count: usize,
+    pub(super) selected_duplicate_row_idx: usize,
+
+    // Drive root confirmation modal
+    pub(super) show_root_subfolder_confirm: bool,
+
+    // Throttled scan sorting & table cache
+    pub(super) last_scan_sort: Instant,
+    pub(super) visible_indices: Vec<usize>,
+    pub(super) visible_indices_dirty: bool,
 
     // Quick Search
     pub(super) quick_search_buffer: String,
@@ -115,6 +130,17 @@ impl FreeDataDietApp {
             active_suggestion: None,
             safety_warning: None,
             cancel_duplicate_hashing: Arc::new(AtomicBool::new(false)),
+            is_finding_duplicates: false,
+            duplicate_receiver: None,
+            duplicate_total_wasted: 0,
+            duplicate_eligible_count: 0,
+            duplicate_eligible_bytes: 0,
+            duplicate_blocked_count: 0,
+            selected_duplicate_row_idx: 0,
+            show_root_subfolder_confirm: false,
+            last_scan_sort: Instant::now(),
+            visible_indices: Vec::new(),
+            visible_indices_dirty: true,
             quick_search_buffer: String::new(),
             quick_search_time: None,
             filter_bar_active: false,
@@ -220,12 +246,95 @@ impl FreeDataDietApp {
     }
 
     pub(super) fn compute_duplicates(&mut self) {
-        self.duplicate_clusters = DuplicateEngine::find_duplicates(
-            &self.entries,
-            self.config.duplicate_criteria,
-            &self.cancel_duplicate_hashing,
-        );
-        self.update_duplicate_assistant();
+        self.cancel_duplicate_hashing.store(true, Ordering::SeqCst);
+        self.cancel_duplicate_hashing = Arc::new(AtomicBool::new(false));
+
+        self.duplicate_clusters.clear();
+        self.active_suggestion = None;
+        self.safety_warning = None;
+        self.is_finding_duplicates = true;
+
+        let entries_clone = self.entries.clone();
+        let criteria = self.config.duplicate_criteria;
+        let cancel = Arc::clone(&self.cancel_duplicate_hashing);
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let clusters = DuplicateEngine::find_duplicates(&entries_clone, criteria, &cancel);
+            let _ = tx.send(clusters);
+        });
+
+        self.duplicate_receiver = Some(rx);
+    }
+
+    pub(super) fn recompute_duplicate_stats(&mut self) {
+        let mut total_wasted = 0u64;
+        let mut eligible_count = 0usize;
+        let mut eligible_bytes = 0u64;
+        let mut blocked_count = 0usize;
+
+        for cluster in &self.duplicate_clusters {
+            total_wasted += cluster.wasted_bytes();
+            if cluster.are_all_copies_selected() && !cluster.is_group_selected {
+                blocked_count += 1;
+            } else {
+                let paths = cluster.deletable_paths();
+                eligible_count += paths.len();
+                eligible_bytes += paths.len() as u64 * cluster.file_size;
+            }
+        }
+
+        self.duplicate_total_wasted = total_wasted;
+        self.duplicate_eligible_count = eligible_count;
+        self.duplicate_eligible_bytes = eligible_bytes;
+        self.duplicate_blocked_count = blocked_count;
+    }
+
+    pub(super) fn update_visible_indices(&mut self) {
+        let cats = self.config.category_filters;
+        let search_filter = self.config.quick_search_mode == QuickSearchMode::LiveFilter
+            && !self.quick_search_buffer.is_empty();
+        let search_query = self.quick_search_buffer.to_lowercase();
+
+        self.visible_indices = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                if !self.config.show_hidden_files
+                    && (e.is_hidden || (e.is_reparse_point && e.is_system_protected))
+                {
+                    return false;
+                }
+                if !self.config.show_system_files && e.is_system_protected {
+                    return false;
+                }
+                if !self.config.show_locked_folders && e.is_access_denied {
+                    return false;
+                }
+                if !e.is_dir {
+                    match e.category {
+                        crate::model::FileCategory::Image if !cats.show_images => return false,
+                        crate::model::FileCategory::Video if !cats.show_videos => return false,
+                        crate::model::FileCategory::Audio if !cats.show_audio => return false,
+                        crate::model::FileCategory::Document if !cats.show_documents => {
+                            return false
+                        }
+                        crate::model::FileCategory::Archive if !cats.show_archives => {
+                            return false
+                        }
+                        _ => {}
+                    }
+                }
+                if search_filter && !e.name.to_lowercase().contains(&search_query) {
+                    return false;
+                }
+                true
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        self.visible_indices_dirty = false;
     }
 
     pub(super) fn update_duplicate_assistant(&mut self) {
@@ -252,7 +361,9 @@ impl FreeDataDietApp {
         }
 
         let mut needs_sort = false;
+        let mut completed = false;
         let mut needs_duplicates = false;
+
         for msg in messages {
             match msg {
                 ScanMessage::Progress { scanned_items } => {
@@ -288,6 +399,7 @@ impl FreeDataDietApp {
                         e.is_scanning = false;
                     }
                     needs_sort = true;
+                    completed = true;
                     if self.config.show_duplicates_only {
                         needs_duplicates = true;
                     }
@@ -299,12 +411,30 @@ impl FreeDataDietApp {
                 }
             }
         }
-        // Sort once per frame instead of once per message
-        if needs_sort {
+
+        // Throttle sorting during active scan to at most once per second so UI stays responsive
+        if completed
+            || (needs_sort && self.last_scan_sort.elapsed() > Duration::from_millis(1000))
+        {
             self.sort_entries();
+            self.last_scan_sort = Instant::now();
+            self.visible_indices_dirty = true;
         }
+
         if needs_duplicates {
             self.compute_duplicates();
+        }
+
+        if self.is_finding_duplicates {
+            if let Some(rx) = &self.duplicate_receiver {
+                if let Ok(clusters) = rx.try_recv() {
+                    self.duplicate_clusters = clusters;
+                    self.is_finding_duplicates = false;
+                    self.duplicate_receiver = None;
+                    self.update_duplicate_assistant();
+                    self.recompute_duplicate_stats();
+                }
+            }
         }
     }
 }
@@ -331,7 +461,7 @@ impl eframe::App for FreeDataDietApp {
 
         self.poll_scanner();
 
-        if self.is_scanning {
+        if self.is_scanning || self.is_finding_duplicates {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
 
@@ -682,9 +812,13 @@ impl eframe::App for FreeDataDietApp {
                     self.trigger_scan();
                 }
                 if toggle_flatten {
-                    self.config.flatten_subfolders = !self.config.flatten_subfolders;
-                    self.save_config();
-                    self.trigger_scan();
+                    if !self.config.flatten_subfolders && crate::model::is_drive_root(&self.current_path) {
+                        self.show_root_subfolder_confirm = true;
+                    } else {
+                        self.config.flatten_subfolders = !self.config.flatten_subfolders;
+                        self.save_config();
+                        self.trigger_scan();
+                    }
                 }
                 if do_refresh {
                     self.trigger_scan();

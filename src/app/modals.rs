@@ -732,5 +732,51 @@ impl FreeDataDietApp {
                 self.show_update_modal = false;
             }
         }
+
+        // --- WHOLE-DRIVE INCLUDE SUBFOLDERS CONFIRMATION MODAL ---
+        if self.show_root_subfolder_confirm {
+            let mut close_confirm = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let mut do_proceed = false;
+
+            egui::Window::new("Include Subfolders on Drive Root")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ui.ctx(), |ui| {
+                    ui.set_max_width(450.0);
+                    ui.label(RichText::new("Whole-Drive Recursive Scan Warning").heading().color(Color32::from_rgb(255, 180, 60)));
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!(
+                        "Scanning entire drive \"{}\" with subfolders enabled will analyze millions of files across your entire storage volume and can take several minutes.",
+                        self.current_path.display()
+                    )).size(13.5));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Do you want to proceed with scanning the entire drive?").strong().small());
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let btn_proceed = egui::Button::new(
+                            RichText::new("Proceed - Scan Entire Drive").color(Color32::WHITE).strong()
+                        ).fill(Color32::from_rgb(200, 110, 0));
+
+                        if ui.add(btn_proceed).clicked() {
+                            do_proceed = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close_confirm = true;
+                        }
+                    });
+                });
+
+            if do_proceed {
+                self.config.flatten_subfolders = true;
+                self.save_config();
+                self.trigger_scan();
+                self.show_root_subfolder_confirm = false;
+            } else if close_confirm {
+                self.show_root_subfolder_confirm = false;
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eframe::egui::{self, Color32, RichText, ScrollArea, Sense};
+use eframe::egui::{self, Color32, RichText, ScrollArea, Sense, Stroke};
 
 use crate::model::{format_size, format_system_time};
 use crate::platform;
@@ -8,24 +8,15 @@ use crate::platform;
 use super::modals::{ActiveContextMenu, DeleteConfirmState, DeleteModalFocus};
 use super::FreeDataDietApp;
 
+#[derive(Clone, Copy)]
+enum DuplicateRowItem {
+    Header(usize),
+    Occurrence(usize, usize),
+}
+
 impl FreeDataDietApp {
     pub(super) fn render_duplicates_view(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let total_clusters = self.duplicate_clusters.len();
-        let total_wasted: u64 = self.duplicate_clusters.iter().map(|c| c.wasted_bytes()).sum();
-
-        let mut eligible_paths: Vec<PathBuf> = Vec::new();
-        let mut eligible_bytes: u64 = 0;
-        let mut blocked_clusters_count = 0usize;
-
-        for cluster in &self.duplicate_clusters {
-            if cluster.are_all_copies_selected() && !cluster.is_group_selected {
-                blocked_clusters_count += 1;
-            } else {
-                let paths = cluster.deletable_paths();
-                eligible_bytes += paths.len() as u64 * cluster.file_size;
-                eligible_paths.extend(paths);
-            }
-        }
 
         // --- TOP DUPLICATES ACTION BAR ---
         ui.horizontal(|ui| {
@@ -33,18 +24,18 @@ impl FreeDataDietApp {
                 RichText::new(format!(
                     "Duplicate Groups: {}  |  Wasted Space: {}  |  Selected to Delete: {} ({})",
                     total_clusters,
-                    format_size(total_wasted),
-                    eligible_paths.len(),
-                    format_size(eligible_bytes)
+                    format_size(self.duplicate_total_wasted),
+                    self.duplicate_eligible_count,
+                    format_size(self.duplicate_eligible_bytes)
                 ))
                 .strong(),
             );
 
-            if blocked_clusters_count > 0 {
+            if self.duplicate_blocked_count > 0 {
                 ui.label(
                     RichText::new(format!(
                         "({} group(s) skipped: check file name box to delete all copies)",
-                        blocked_clusters_count
+                        self.duplicate_blocked_count
                     ))
                     .small()
                     .color(Color32::from_rgb(255, 180, 60)),
@@ -59,7 +50,7 @@ impl FreeDataDietApp {
                     return;
                 }
 
-                let has_eligible = !eligible_paths.is_empty();
+                let has_eligible = self.duplicate_eligible_count > 0;
                 let perm_btn = egui::Button::new(
                     RichText::new("Delete Permanently").color(if has_eligible {
                         Color32::from_rgb(255, 110, 110)
@@ -68,9 +59,18 @@ impl FreeDataDietApp {
                     }),
                 );
                 if ui.add_enabled(has_eligible, perm_btn).clicked() {
+                    let mut paths = Vec::new();
+                    let mut total_size = 0u64;
+                    for cluster in &self.duplicate_clusters {
+                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
+                            let p = cluster.deletable_paths();
+                            total_size += p.len() as u64 * cluster.file_size;
+                            paths.extend(p);
+                        }
+                    }
                     self.delete_modal = DeleteConfirmState::Batch {
-                        paths: eligible_paths.clone(),
-                        total_size: eligible_bytes,
+                        paths,
+                        total_size,
                         has_system: false,
                     };
                     self.modal_focus = DeleteModalFocus::Permanent;
@@ -84,9 +84,18 @@ impl FreeDataDietApp {
                     }),
                 );
                 if ui.add_enabled(has_eligible, trash_btn).clicked() {
+                    let mut paths = Vec::new();
+                    let mut total_size = 0u64;
+                    for cluster in &self.duplicate_clusters {
+                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
+                            let p = cluster.deletable_paths();
+                            total_size += p.len() as u64 * cluster.file_size;
+                            paths.extend(p);
+                        }
+                    }
                     self.delete_modal = DeleteConfirmState::Batch {
-                        paths: eligible_paths.clone(),
-                        total_size: eligible_bytes,
+                        paths,
+                        total_size,
                         has_system: false,
                     };
                     self.modal_focus = DeleteModalFocus::Trash;
@@ -98,6 +107,7 @@ impl FreeDataDietApp {
                     }
                     self.safety_warning = None;
                     self.update_duplicate_assistant();
+                    self.recompute_duplicate_stats();
                 }
 
                 if ui
@@ -113,6 +123,7 @@ impl FreeDataDietApp {
                     }
                     self.safety_warning = None;
                     self.update_duplicate_assistant();
+                    self.recompute_duplicate_stats();
                 }
             });
         });
@@ -161,6 +172,7 @@ impl FreeDataDietApp {
                 }
             }
             self.update_duplicate_assistant();
+            self.recompute_duplicate_stats();
         }
         if dismiss_sugg {
             self.active_suggestion = None;
@@ -172,19 +184,15 @@ impl FreeDataDietApp {
         if let Some((warn_msg, first_path)) = &self.safety_warning {
             egui::Frame::new()
                 .fill(if is_dark { Color32::from_rgb(65, 38, 20) } else { Color32::from_rgb(255, 235, 210) })
-                .stroke(egui::Stroke::new(1.0, Color32::from_rgb(230, 140, 40)))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(230, 140, 40)))
                 .corner_radius(3.0)
                 .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(warn_msg)
-                                .color(if is_dark { Color32::from_rgb(255, 200, 110) } else { Color32::from_rgb(160, 70, 0) })
-                                .strong()
-                                .small(),
-                        );
+                        ui.label(RichText::new("[!]").color(Color32::from_rgb(255, 175, 50)).strong());
+                        ui.label(RichText::new(warn_msg).small());
                         if let Some(fp) = first_path {
-                            if ui.small_button("Jump to First Copy").clicked() {
+                            if ui.small_button("Jump to First Occurrence").clicked() {
                                 jump_to_first = Some(fp.clone());
                             }
                         }
@@ -195,8 +203,8 @@ impl FreeDataDietApp {
                 });
             ui.add_space(2.0);
         }
-        if let Some(fp) = jump_to_first {
-            self.selected_path = Some(fp);
+        if let Some(target) = jump_to_first {
+            self.selected_path = Some(target);
             self.force_scroll_to_selected = true;
         }
         if clear_warn {
@@ -205,19 +213,25 @@ impl FreeDataDietApp {
 
         ui.separator();
 
-        if self.is_scanning {
+        if self.is_scanning || self.is_finding_duplicates {
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
                 ui.spinner();
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!(
-                        "Scanning subfolders for duplicates... {} items analyzed",
-                        self.scanned_counter
-                    ))
-                    .italics()
-                    .weak(),
-                );
+                let msg = if self.is_finding_duplicates {
+                    "Analyzing and grouping duplicate files...".to_string()
+                } else {
+                    format!("Scanning subfolders for duplicates... {} items analyzed", self.scanned_counter)
+                };
+                ui.label(RichText::new(msg).italics().weak());
+                if self.is_finding_duplicates {
+                    ui.add_space(8.0);
+                    if ui.button("Cancel Duplicate Search").clicked() {
+                        self.cancel_duplicate_hashing.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.is_finding_duplicates = false;
+                        self.duplicate_receiver = None;
+                    }
+                }
             });
             return;
         }
@@ -240,18 +254,26 @@ impl FreeDataDietApp {
             return;
         }
 
-        // Flatten all occurrences for keyboard navigation
-        let all_occ_paths: Vec<PathBuf> = self
-            .duplicate_clusters
-            .iter()
-            .flat_map(|c| c.occurrences.iter().map(|o| o.path.clone()))
-            .collect();
+        // Build flat row mapping for virtualized rendering
+        let mut flat_rows: Vec<DuplicateRowItem> = Vec::new();
+        for c_idx in 0..self.duplicate_clusters.len() {
+            flat_rows.push(DuplicateRowItem::Header(c_idx));
+            for o_idx in 0..self.duplicate_clusters[c_idx].occurrences.len() {
+                flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
+            }
+        }
+        let total_rows = flat_rows.len();
 
         let mut scroll_to_selected = self.force_scroll_to_selected;
         self.force_scroll_to_selected = false;
         let mut open_context_menu: Option<ActiveContextMenu> = None;
+        let mut stats_dirty = false;
+        let mut new_warning: Option<(String, Option<PathBuf>)> = None;
 
-        if !ui.ctx().egui_wants_keyboard_input()
+        let is_main_focus = self.panel_focus == super::ActivePanelFocus::MainView;
+
+        if is_main_focus
+            && !ui.ctx().egui_wants_keyboard_input()
             && self.delete_modal == DeleteConfirmState::None
             && self.active_context_menu.is_none()
             && !self.show_shortcuts_modal
@@ -262,37 +284,35 @@ impl FreeDataDietApp {
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
             let shift = ui.input(|i| i.modifiers.shift);
-            let curr_idx = self
-                .selected_path
-                .as_ref()
-                .and_then(|p| all_occ_paths.iter().position(|op| op == p));
 
-            if down && !all_occ_paths.is_empty() {
-                let next = match curr_idx {
-                    Some(idx) => (idx + 1).min(all_occ_paths.len().saturating_sub(1)),
-                    None => 0,
-                };
-                self.selected_path = Some(all_occ_paths[next].clone());
+            if down && total_rows > 0 {
+                self.selected_duplicate_row_idx = (self.selected_duplicate_row_idx + 1).min(total_rows - 1);
                 scroll_to_selected = true;
             }
-            if up && !all_occ_paths.is_empty() {
-                let prev = match curr_idx {
-                    Some(idx) => idx.saturating_sub(1),
-                    None => 0,
-                };
-                self.selected_path = Some(all_occ_paths[prev].clone());
+            if up && total_rows > 0 {
+                self.selected_duplicate_row_idx = self.selected_duplicate_row_idx.saturating_sub(1);
                 scroll_to_selected = true;
             }
-            if space {
-                if let Some(sel_p) = self.selected_path.clone() {
-                    let mut triggered_warn = None;
-                    for cluster in &mut self.duplicate_clusters {
-                        if let Some(occ) = cluster.occurrences.iter().find(|o| o.path == sel_p) {
-                            let new_sel = !occ.is_selected;
-                            cluster.set_copy_selected(&sel_p, new_sel);
-                            if new_sel && cluster.are_all_copies_selected() && !cluster.is_group_selected {
+
+            if space && self.selected_duplicate_row_idx < total_rows {
+                match flat_rows[self.selected_duplicate_row_idx] {
+                    DuplicateRowItem::Header(c_idx) => {
+                        let cluster = &mut self.duplicate_clusters[c_idx];
+                        let new_val = !cluster.is_group_selected;
+                        cluster.set_group_selected(new_val);
+                        stats_dirty = true;
+                    }
+                    DuplicateRowItem::Occurrence(c_idx, o_idx) => {
+                        let cluster = &mut self.duplicate_clusters[c_idx];
+                        let occ = &mut cluster.occurrences[o_idx];
+                        if !occ.is_system_protected {
+                            let new_val = !occ.is_selected;
+                            let occ_path = occ.path.clone();
+                            cluster.set_copy_selected(&occ_path, new_val);
+                            stats_dirty = true;
+                            if new_val && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                 let first_p = cluster.occurrences.first().map(|o| o.path.clone());
-                                triggered_warn = Some((
+                                new_warning = Some((
                                     format!(
                                         "All copies of \"{}\" are marked, but the file name checkbox is not checked. None of its copies will be deleted unless you check the file name box.",
                                         cluster.primary_name
@@ -300,34 +320,37 @@ impl FreeDataDietApp {
                                     first_p,
                                 ));
                             }
-                            break;
                         }
                     }
-                    if let Some((msg, fp)) = triggered_warn {
-                        if let Some(first_p) = &fp {
-                            self.selected_path = Some(first_p.clone());
-                            scroll_to_selected = true;
-                        }
-                        self.safety_warning = Some((msg, fp));
-                    }
-                    self.update_duplicate_assistant();
                 }
             }
-            if enter {
-                if let Some(sel_p) = &self.selected_path {
-                    let _ = platform::open_in_file_manager(sel_p);
+
+            if enter && self.selected_duplicate_row_idx < total_rows {
+                if let DuplicateRowItem::Occurrence(c_idx, o_idx) = flat_rows[self.selected_duplicate_row_idx] {
+                    let occ = &self.duplicate_clusters[c_idx].occurrences[o_idx];
+                    let _ = platform::open_in_file_manager(&occ.path);
                 }
             }
-            if del && !eligible_paths.is_empty() {
+
+            if del && self.duplicate_eligible_count > 0 {
                 let can_delete = if shift {
                     self.config.shortcuts.shift_del_permanent
                 } else {
                     self.config.shortcuts.del_trash
                 };
                 if can_delete {
+                    let mut paths = Vec::new();
+                    let mut total_size = 0u64;
+                    for cluster in &self.duplicate_clusters {
+                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
+                            let p = cluster.deletable_paths();
+                            total_size += p.len() as u64 * cluster.file_size;
+                            paths.extend(p);
+                        }
+                    }
                     self.delete_modal = DeleteConfirmState::Batch {
-                        paths: eligible_paths.clone(),
-                        total_size: eligible_bytes,
+                        paths,
+                        total_size,
                         has_system: false,
                     };
                     self.modal_focus = if shift {
@@ -339,46 +362,51 @@ impl FreeDataDietApp {
             }
         }
 
-        // --- SCROLLABLE DUPLICATE CLUSTERS ---
-        let mut assistant_dirty = false;
-        let mut new_warning: Option<(String, Option<PathBuf>)> = None;
+        // --- VIRTUALIZED SCROLLABLE DUPLICATE ROWS ---
+        let row_height = 25.0;
+        let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+        if scroll_to_selected {
+            let offset = (self.selected_duplicate_row_idx as f32 * row_height - 100.0).max(0.0);
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
 
-        ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for cluster in &mut self.duplicate_clusters {
-                    let cluster_id = cluster.cluster_id.clone();
-                    let primary_name = cluster.primary_name.clone();
-                    let copies_count = cluster.occurrences.len();
-                    let file_size = cluster.file_size;
-                    let wasted = cluster.wasted_bytes();
-                    let all_copies_checked_unconfirmed =
-                        cluster.are_all_copies_selected() && !cluster.is_group_selected;
+        scroll.show_rows(ui, row_height, total_rows, |ui, row_range| {
+            for r_idx in row_range {
+                let is_cursor_row = r_idx == self.selected_duplicate_row_idx;
+                match flat_rows[r_idx] {
+                    DuplicateRowItem::Header(c_idx) => {
+                        let cluster = &mut self.duplicate_clusters[c_idx];
+                        let primary_name = cluster.primary_name.clone();
+                        let copies_count = cluster.occurrences.len();
+                        let file_size = cluster.file_size;
+                        let wasted = cluster.wasted_bytes();
+                        let all_copies_checked_unconfirmed =
+                            cluster.are_all_copies_selected() && !cluster.is_group_selected;
 
-                    ui.push_id(&cluster_id, |ui| {
                         let header_bg = if all_copies_checked_unconfirmed {
                             if is_dark { Color32::from_rgb(65, 42, 22) } else { Color32::from_rgb(255, 232, 205) }
+                        } else if is_cursor_row {
+                            if is_dark { Color32::from_rgb(38, 55, 78) } else { Color32::from_rgb(215, 232, 252) }
                         } else if is_dark {
-                            Color32::from_rgb(30, 38, 50)
+                            Color32::from_rgb(28, 34, 44)
                         } else {
-                            Color32::from_rgb(230, 236, 246)
+                            Color32::from_rgb(232, 238, 246)
                         };
 
                         egui::Frame::new()
                             .fill(header_bg)
                             .corner_radius(3.0)
-                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .inner_margin(egui::Margin::symmetric(8, 3))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    // Master checkbox in front of the file name (never checked automatically)
                                     let mut group_sel = cluster.is_group_selected;
                                     if ui
                                         .checkbox(&mut group_sel, "")
-                                        .on_hover_text("Select file name to automatically select all copies and authorize deleting all occurrences of this file")
+                                        .on_hover_text("Select file name to authorize deleting all occurrences of this file")
                                         .changed()
                                     {
                                         cluster.set_group_selected(group_sel);
-                                        assistant_dirty = true;
+                                        stats_dirty = true;
                                     }
 
                                     ui.label(
@@ -417,135 +445,125 @@ impl FreeDataDietApp {
                                             for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
                                                 occ.is_selected = i > 0 && !occ.is_system_protected;
                                             }
-                                            assistant_dirty = true;
+                                            stats_dirty = true;
                                         }
                                     });
                                 });
                             });
+                    }
+                    DuplicateRowItem::Occurrence(c_idx, o_idx) => {
+                        let cluster = &mut self.duplicate_clusters[c_idx];
+                        let all_copies_checked_unconfirmed =
+                            cluster.are_all_copies_selected() && !cluster.is_group_selected;
+                        let primary_name = cluster.primary_name.clone();
+                        let occ = &mut cluster.occurrences[o_idx];
 
-                        let num_occ = cluster.occurrences.len();
-                        for occ_idx in 0..num_occ {
-                            let (occ_path, occ_name, is_hardlink, is_sys, modified, is_sel) = {
-                                let o = &cluster.occurrences[occ_idx];
-                                (
-                                    o.path.clone(),
-                                    o.name.clone(),
-                                    o.is_hardlink,
-                                    o.is_system_protected,
-                                    o.modified,
-                                    o.is_selected,
-                                )
-                            };
+                        let occ_path = occ.path.clone();
+                        let occ_name = occ.name.clone();
+                        let is_hardlink = occ.is_hardlink;
+                        let is_sys = occ.is_system_protected;
+                        let modified = occ.modified;
+                        let mut copy_checked = occ.is_selected;
 
-                            let is_cursor = self.selected_path.as_ref() == Some(&occ_path);
-                            let row_bg = if is_cursor {
-                                if is_dark { Color32::from_rgb(32, 54, 82) } else { Color32::from_rgb(205, 228, 252) }
-                            } else {
-                                Color32::TRANSPARENT
-                            };
+                        let row_bg = if is_cursor_row {
+                            if is_dark { Color32::from_rgb(32, 54, 82) } else { Color32::from_rgb(205, 228, 252) }
+                        } else {
+                            Color32::TRANSPARENT
+                        };
 
-                            let row_resp = egui::Frame::new()
-                                .fill(row_bg)
-                                .corner_radius(2.0)
-                                .inner_margin(egui::Margin::symmetric(6, 2))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(18.0);
+                        egui::Frame::new()
+                            .fill(row_bg)
+                            .corner_radius(2.0)
+                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(18.0);
 
-                                        let mut copy_checked = is_sel;
-                                        let cb = ui.add_enabled(!is_sys, egui::Checkbox::new(&mut copy_checked, ""));
-                                        if cb.changed() {
-                                            cluster.set_copy_selected(&occ_path, copy_checked);
-                                            assistant_dirty = true;
-                                            if copy_checked && cluster.are_all_copies_selected() && !cluster.is_group_selected {
-                                                let first_p = cluster.occurrences.first().map(|o| o.path.clone());
-                                                new_warning = Some((
-                                                    format!(
-                                                        "All copies of \"{}\" are marked, but the file name checkbox is not checked. None of its copies will be deleted unless you check the file name box.",
-                                                        primary_name
-                                                    ),
-                                                    first_p,
-                                                ));
-                                            }
+                                    let cb = ui.add_enabled(!is_sys, egui::Checkbox::new(&mut copy_checked, ""));
+                                    if cb.changed() {
+                                        cluster.set_copy_selected(&occ_path, copy_checked);
+                                        stats_dirty = true;
+                                        if copy_checked && cluster.are_all_copies_selected() && !cluster.is_group_selected {
+                                            let first_p = cluster.occurrences.first().map(|o| o.path.clone());
+                                            new_warning = Some((
+                                                format!(
+                                                    "All copies of \"{}\" are marked, but the file name checkbox is not checked. None of its copies will be deleted unless you check the file name box.",
+                                                    primary_name
+                                                ),
+                                                first_p,
+                                            ));
                                         }
+                                    }
 
-                                        if is_sys {
-                                            ui.label(RichText::new("[SYS]").monospace().small().color(Color32::from_rgb(255, 175, 40)));
-                                        } else if is_hardlink {
-                                            ui.label(RichText::new("[LINK]").monospace().small().color(Color32::from_rgb(200, 160, 255)));
-                                        }
+                                    if is_sys {
+                                        ui.label(RichText::new("[SYS]").monospace().small().color(Color32::from_rgb(255, 175, 40)));
+                                    } else if is_hardlink {
+                                        ui.label(RichText::new("[LINK]").monospace().small().color(Color32::from_rgb(200, 160, 255)));
+                                    }
 
-                                        let path_color = if copy_checked && !all_copies_checked_unconfirmed {
-                                            Color32::from_rgb(255, 130, 130)
-                                        } else if is_cursor {
-                                            if is_dark { Color32::from_rgb(120, 215, 255) } else { Color32::from_rgb(0, 90, 180) }
-                                        } else if is_dark {
-                                            Color32::LIGHT_GRAY
-                                        } else {
-                                            Color32::from_rgb(25, 30, 40)
-                                        };
+                                    let path_color = if copy_checked && !all_copies_checked_unconfirmed {
+                                        Color32::from_rgb(255, 130, 130)
+                                    } else if is_cursor_row {
+                                        if is_dark { Color32::from_rgb(120, 215, 255) } else { Color32::from_rgb(0, 90, 180) }
+                                    } else if is_dark {
+                                        Color32::LIGHT_GRAY
+                                    } else {
+                                        Color32::from_rgb(25, 30, 40)
+                                    };
 
-                                        let lbl = ui.add(
-                                            egui::Label::new(
-                                                RichText::new(occ_path.to_string_lossy().as_ref()).color(path_color),
-                                            )
-                                            .sense(Sense::click()),
-                                        );
+                                    let lbl = ui.add(
+                                        egui::Label::new(
+                                            RichText::new(occ_path.to_string_lossy().as_ref()).color(path_color),
+                                        )
+                                        .sense(Sense::click()),
+                                    );
 
-                                        if lbl.clicked() {
-                                            self.selected_path = Some(occ_path.clone());
-                                        }
-                                        if lbl.double_clicked() {
-                                            let _ = platform::open_in_file_manager(&occ_path);
-                                        }
-                                        if lbl.secondary_clicked() {
-                                            self.selected_path = Some(occ_path.clone());
-                                            let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-                                            open_context_menu = Some(ActiveContextMenu {
-                                                path: occ_path.clone(),
-                                                name: occ_name,
-                                                is_dir: false,
-                                                is_system_protected: is_sys,
-                                                pos: pointer_pos,
-                                                selected_idx: 0,
-                                                just_opened: true,
-                                            });
-                                        }
-
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if let Some(m) = modified {
-                                                ui.label(
-                                                    RichText::new(format_system_time(m))
-                                                        .monospace()
-                                                        .small()
-                                                        .weak(),
-                                                );
-                                            }
+                                    if lbl.clicked() {
+                                        self.selected_duplicate_row_idx = r_idx;
+                                    }
+                                    if lbl.double_clicked() {
+                                        let _ = platform::open_in_file_manager(&occ_path);
+                                    }
+                                    if lbl.secondary_clicked() {
+                                        self.selected_duplicate_row_idx = r_idx;
+                                        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+                                        open_context_menu = Some(ActiveContextMenu {
+                                            path: occ_path.clone(),
+                                            name: occ_name,
+                                            is_dir: false,
+                                            is_system_protected: is_sys,
+                                            pos: pointer_pos,
+                                            selected_idx: 0,
+                                            just_opened: true,
                                         });
+                                    }
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if let Some(m) = modified {
+                                            ui.label(
+                                                RichText::new(format_system_time(m))
+                                                    .monospace()
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
                                     });
-                                })
-                                .response;
-
-                            if is_cursor && scroll_to_selected {
-                                row_resp.scroll_to_me(Some(egui::Align::Center));
-                            }
-                        }
-
-                        ui.add_space(4.0);
-                    });
+                                });
+                            });
+                    }
                 }
-            });
+            }
+        });
+
+        if stats_dirty {
+            self.update_duplicate_assistant();
+            self.recompute_duplicate_stats();
+        }
 
         if let Some((msg, fp)) = new_warning {
-            if let Some(first_p) = &fp {
-                self.selected_path = Some(first_p.clone());
-                self.force_scroll_to_selected = true;
-            }
             self.safety_warning = Some((msg, fp));
         }
-        if assistant_dirty {
-            self.update_duplicate_assistant();
-        }
+
         if let Some(menu) = open_context_menu {
             self.active_context_menu = Some(menu);
         }

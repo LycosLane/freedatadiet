@@ -218,13 +218,17 @@ pub fn is_system_path(path: &Path) -> bool {
     false
 }
 
-pub fn is_root_or_system(path: &Path) -> bool {
+pub fn is_drive_root(path: &Path) -> bool {
     if path.parent().is_none() {
         return true;
     }
     let raw = path.to_string_lossy().replace('/', "\\");
     let s = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
-    if s == "\\" || (s.len() <= 3 && s.contains(':')) {
+    s == "\\" || (s.len() <= 3 && s.contains(':'))
+}
+
+pub fn is_root_or_system(path: &Path) -> bool {
+    if is_drive_root(path) {
         return true;
     }
     is_system_path(path)

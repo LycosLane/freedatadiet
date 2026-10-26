@@ -361,9 +361,13 @@ impl FreeDataDietApp {
                 ).on_hover_text("Show all files and folders from current folder and all subfolders in one flat list");
 
                 if pill_flatten.clicked() || (is_f_0 && key_activate) {
-                    self.config.flatten_subfolders = !self.config.flatten_subfolders;
-                    self.save_config();
-                    trigger_rescan = true;
+                    if !self.config.flatten_subfolders && crate::model::is_drive_root(&self.current_path) {
+                        self.show_root_subfolder_confirm = true;
+                    } else {
+                        self.config.flatten_subfolders = !self.config.flatten_subfolders;
+                        self.save_config();
+                        trigger_rescan = true;
+                    }
                 }
 
                 ui.add_space(6.0);
