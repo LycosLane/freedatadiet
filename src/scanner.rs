@@ -237,12 +237,23 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
 fn matches_exclude(name: &str, excludes: &[String]) -> bool {
     let lower = name.to_lowercase();
     for ex in excludes {
-        let pattern = ex.trim();
+        let pattern = ex.trim().to_lowercase();
         if pattern.is_empty() {
             continue;
         }
-        if let Some(suffix) = pattern.strip_prefix('*') {
+
+        // Wildcard support: *pattern*, *suffix, prefix*, or exact match
+        if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 2 {
+            let substr = &pattern[1..pattern.len() - 1];
+            if lower.contains(substr) {
+                return true;
+            }
+        } else if let Some(suffix) = pattern.strip_prefix('*') {
             if lower.ends_with(suffix) {
+                return true;
+            }
+        } else if let Some(prefix) = pattern.strip_suffix('*') {
+            if lower.starts_with(prefix) {
                 return true;
             }
         } else if lower == pattern {

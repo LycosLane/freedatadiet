@@ -203,13 +203,11 @@ impl FreeDataDietApp {
             }
         }
 
-        // 2. Application & Media Render Caches
+        // 2. Application & Media Render Caches (generic patterns + media tools)
         if self.ignore_media_caches {
             let media_presets = [
-                "CacheClip", ".gallery", "OptimizedMedia", "ProxyMedia",
+                "*cache*", "*thumb*", ".gallery", "OptimizedMedia", "ProxyMedia",
                 "Media Cache Files", "Media Cache", "DerivedDataCache",
-                "ShaderCache", "GPUCache", "DawnCache", "Code Cache",
-                "thumbcache_*.db", "thumbs.db", ".thumbnails",
             ];
             for item in media_presets {
                 if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
