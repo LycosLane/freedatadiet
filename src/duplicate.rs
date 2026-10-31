@@ -126,22 +126,32 @@ impl DuplicateCluster {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DuplicateMessage {
+    Progress { stage: String, done: usize, total: usize },
+    Completed(Vec<DuplicateCluster>),
+}
+
+#[derive(Debug, Clone)]
 pub struct DuplicateSuggestion {
     pub folder_path: PathBuf,
     pub folder_name: String,
     pub candidate_paths: Vec<PathBuf>,
     pub reclaimable_bytes: u64,
+    pub message: String,
 }
 
 pub struct DuplicateEngine;
 
 impl DuplicateEngine {
     /// Detects duplicate files from a list of scanned entries according to criteria.
-    /// Uses two-pass verification (4KB Prefix Hash -> 64KB Chunked Full SHA-256).
+    /// Uses two-pass verification (4KB Prefix Hash -> 64KB Chunked Full SHA-256)
+    /// with optional progress reporting.
     pub fn find_duplicates(
         entries: &[FileEntry],
         criteria: DuplicateCriteriaConfig,
         cancel_flag: &Arc<AtomicBool>,
+        progress_tx: Option<&std::sync::mpsc::Sender<DuplicateMessage>>,
     ) -> Vec<DuplicateCluster> {
         let files: Vec<&FileEntry> = entries
             .iter()
@@ -149,7 +159,18 @@ impl DuplicateEngine {
             .collect();
 
         if files.len() < 2 {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
+            }
             return Vec::new();
+        }
+
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(DuplicateMessage::Progress {
+                stage: "Partitioning candidate files by size...".into(),
+                done: 0,
+                total: files.len(),
+            });
         }
 
         // Stage 1: Partition by file size (u64) if match_size is enabled
@@ -167,6 +188,9 @@ impl DuplicateEngine {
         };
 
         if size_groups.is_empty() {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
+            }
             return Vec::new();
         }
 
@@ -193,6 +217,9 @@ impl DuplicateEngine {
         };
 
         if name_groups.is_empty() {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
+            }
             return Vec::new();
         }
 
@@ -218,39 +245,155 @@ impl DuplicateEngine {
             name_groups
         };
 
+        if metadata_groups.is_empty() {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
+            }
+            return Vec::new();
+        }
+
         let mut clusters = Vec::new();
         let mut cluster_idx = 1;
 
-        for group in metadata_groups {
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
+        if !criteria.verify_hash {
+            for group in metadata_groups {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+                if group.len() >= 2 {
+                    let cluster = Self::build_cluster_from_group(
+                        format!("cluster_{cluster_idx}"),
+                        &group,
+                        None,
+                    );
+                    clusters.push(cluster);
+                    cluster_idx += 1;
+                }
             }
-            if group.len() < 2 {
-                continue;
+            clusters.sort_by(|a, b| b.wasted_bytes().cmp(&a.wasted_bytes()));
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Completed(clusters.clone()));
             }
+            return clusters;
+        }
 
-            if !criteria.verify_hash {
+        // --- VERIFY HASH (PARALLEL TWO-PASS WITH RAYON & PROGRESS) ---
+        // Flatten candidate files with group index
+        let mut indexed_candidates: Vec<(usize, &FileEntry)> = Vec::new();
+        for (g_idx, group) in metadata_groups.iter().enumerate() {
+            for file in group {
+                indexed_candidates.push((g_idx, *file));
+            }
+        }
+
+        let total_prefix_files = indexed_candidates.len();
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(DuplicateMessage::Progress {
+                stage: "Hashing candidate headers (4 KB)...".into(),
+                done: 0,
+                total: total_prefix_files,
+            });
+        }
+
+        // Pass 1: 4 KB Prefix Hash
+        let prefix_counter = std::sync::atomic::AtomicUsize::new(0);
+        let prefix_results: Vec<Option<(usize, [u8; 32], &FileEntry)>> = indexed_candidates
+            .par_iter()
+            .map(|(g_idx, file)| {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let res = match Self::hash_prefix(&file.path, cancel_flag) {
+                    Ok(Some(hash)) => Some((*g_idx, hash, *file)),
+                    _ => None,
+                };
+                let done = prefix_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % 200 == 0 || done == total_prefix_files {
+                    if let Some(tx) = progress_tx {
+                        let _ = tx.send(DuplicateMessage::Progress {
+                            stage: "Hashing candidate headers (4 KB)...".into(),
+                            done,
+                            total: total_prefix_files,
+                        });
+                    }
+                }
+                res
+            })
+            .collect();
+
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+
+        // Group survivors by (g_idx, prefix_hash)
+        let mut prefix_groups: HashMap<(usize, [u8; 32]), Vec<&FileEntry>> = HashMap::new();
+        for item in prefix_results.into_iter().flatten() {
+            prefix_groups.entry((item.0, item.1)).or_default().push(item.2);
+        }
+
+        // Filter groups with >= 2 candidates
+        let mut survivor_groups: Vec<((usize, [u8; 32]), Vec<&FileEntry>)> = Vec::new();
+        for (key, candidates) in prefix_groups {
+            if candidates.len() >= 2 {
+                survivor_groups.push((key, candidates));
+            }
+        }
+
+        // Collect files requiring full hash (size > 4KB)
+        let mut full_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
+        let mut small_clusters: Vec<DuplicateCluster> = Vec::new();
+
+        for ((g_idx, prefix_hash), candidates) in survivor_groups {
+            if candidates[0].size <= PREFIX_HASH_LEN as u64 {
                 let cluster = Self::build_cluster_from_group(
-                    format!("cluster_{cluster_idx}"),
-                    &group,
-                    None,
+                    format!("cluster_h{cluster_idx}"),
+                    &candidates,
+                    Some(prefix_hash),
                 );
-                clusters.push(cluster);
+                small_clusters.push(cluster);
                 cluster_idx += 1;
-                continue;
+            } else {
+                for file in candidates {
+                    full_hash_items.push((g_idx, prefix_hash, file));
+                }
+            }
+        }
+
+        clusters.extend(small_clusters);
+
+        // Pass 2: Full Streaming SHA-256 for large files
+        let total_full_files = full_hash_items.len();
+        if total_full_files > 0 {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Progress {
+                    stage: "Verifying exact SHA-256 hashes...".into(),
+                    done: 0,
+                    total: total_full_files,
+                });
             }
 
-            // Pass 1: 4 KB Prefix Hash (parallelized with rayon)
-            let prefix_results: Vec<Option<([u8; 32], &FileEntry)>> = group
+            let full_counter = std::sync::atomic::AtomicUsize::new(0);
+            let full_results: Vec<Option<(usize, [u8; 32], &FileEntry)>> = full_hash_items
                 .par_iter()
-                .map(|file| {
+                .map(|(g_idx, _, file)| {
                     if cancel_flag.load(Ordering::Relaxed) {
                         return None;
                     }
-                    match Self::hash_prefix(&file.path, cancel_flag) {
-                        Ok(Some(hash)) => Some((hash, *file)),
+                    let res = match Self::hash_full_file(&file.path, file.size, cancel_flag) {
+                        Ok(Some(hash)) => Some((*g_idx, hash, *file)),
                         _ => None,
+                    };
+                    let done = full_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % 10 == 0 || done == total_full_files {
+                        if let Some(tx) = progress_tx {
+                            let _ = tx.send(DuplicateMessage::Progress {
+                                stage: "Verifying exact SHA-256 hashes...".into(),
+                                done,
+                                total: total_full_files,
+                            });
+                        }
                     }
+                    res
                 })
                 .collect();
 
@@ -258,58 +401,28 @@ impl DuplicateEngine {
                 return Vec::new();
             }
 
-            let mut prefix_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
-            for item in prefix_results.into_iter().flatten() {
-                prefix_map.entry(item.0).or_default().push(item.1);
+            let mut full_groups: HashMap<(usize, [u8; 32]), Vec<&FileEntry>> = HashMap::new();
+            for item in full_results.into_iter().flatten() {
+                full_groups.entry((item.0, item.1)).or_default().push(item.2);
             }
 
-            // Pass 2: Full Streaming SHA-256 for survivors (parallelized with rayon)
-            for (prefix_hash, candidates) in prefix_map {
-                if candidates.len() < 2 {
-                    continue;
-                }
-
-                let full_results: Vec<Option<([u8; 32], &FileEntry)>> = candidates
-                    .par_iter()
-                    .map(|file| {
-                        if cancel_flag.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                        if file.size <= PREFIX_HASH_LEN as u64 {
-                            Some((prefix_hash, *file))
-                        } else {
-                            match Self::hash_full_file(&file.path, file.size, cancel_flag) {
-                                Ok(Some(hash)) => Some((hash, *file)),
-                                _ => None,
-                            }
-                        }
-                    })
-                    .collect();
-
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-
-                let mut full_hash_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
-                for item in full_results.into_iter().flatten() {
-                    full_hash_map.entry(item.0).or_default().push(item.1);
-                }
-
-                for (verified_hash, verified_files) in full_hash_map {
-                    if verified_files.len() >= 2 {
-                        let cluster = Self::build_cluster_from_group(
-                            format!("cluster_h{cluster_idx}"),
-                            &verified_files,
-                            Some(verified_hash),
-                        );
-                        clusters.push(cluster);
-                        cluster_idx += 1;
-                    }
+            for ((_, full_hash), files) in full_groups {
+                if files.len() >= 2 {
+                    let cluster = Self::build_cluster_from_group(
+                        format!("cluster_h{cluster_idx}"),
+                        &files,
+                        Some(full_hash),
+                    );
+                    clusters.push(cluster);
+                    cluster_idx += 1;
                 }
             }
         }
 
         clusters.sort_by(|a, b| b.wasted_bytes().cmp(&a.wasted_bytes()));
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(DuplicateMessage::Completed(clusters.clone()));
+        }
         clusters
     }
 
@@ -470,11 +583,45 @@ impl DuplicateEngine {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| dir.to_string_lossy().to_string());
 
+                let mut keeper_names = HashSet::new();
+                for cluster in clusters {
+                    let has_cand = cluster.occurrences.iter().any(|o| candidates.contains(&o.path));
+                    if has_cand {
+                        for occ in &cluster.occurrences {
+                            if occ.path.parent() != Some(&dir) && !selected_paths.contains(&occ.path) {
+                                if let Some(p) = occ.path.parent() {
+                                    let kn = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.to_string_lossy().to_string());
+                                    keeper_names.insert(kn);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let message = if keeper_names.len() == 1 {
+                    let keeper_name = keeper_names.into_iter().next().unwrap();
+                    format!(
+                        "Pattern Match: Found {} sibling copies in \"{}\" with preserved copies in \"{}\" ({} reclaimable).",
+                        candidates.len(),
+                        folder_name,
+                        keeper_name,
+                        crate::model::format_size(bytes)
+                    )
+                } else {
+                    format!(
+                        "Duplicate Assistant: Found {} sibling duplicate copies in folder \"{}\" ({} reclaimable).",
+                        candidates.len(),
+                        folder_name,
+                        crate::model::format_size(bytes)
+                    )
+                };
+
                 return Some(DuplicateSuggestion {
                     folder_path: dir,
                     folder_name,
                     candidate_paths: candidates,
                     reclaimable_bytes: bytes,
+                    message,
                 });
             }
         }
@@ -581,7 +728,7 @@ mod tests {
             verify_hash: true,
         };
 
-        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel);
+        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, None);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].occurrences.len(), 2);
         let paths: Vec<PathBuf> = clusters[0].occurrences.iter().map(|o| o.path.clone()).collect();
@@ -593,5 +740,79 @@ mod tests {
         let _ = std::fs::remove_file(&file2);
         let _ = std::fs::remove_file(&file3);
         let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_duplicate_folder_pattern_suggestion() {
+        let occ1_a = DuplicateOccurrence {
+            path: PathBuf::from("C:\\Keep\\photo1.jpg"),
+            name: "photo1.jpg".into(),
+            size: 500,
+            modified: None,
+            file_id: None,
+            is_hardlink: false,
+            is_system_protected: false,
+            is_selected: false,
+        };
+        let occ1_b = DuplicateOccurrence {
+            path: PathBuf::from("C:\\Sync\\photo1.jpg"),
+            name: "photo1.jpg".into(),
+            size: 500,
+            modified: None,
+            file_id: None,
+            is_hardlink: false,
+            is_system_protected: false,
+            is_selected: true, // User selected this one to delete
+        };
+
+        let occ2_a = DuplicateOccurrence {
+            path: PathBuf::from("C:\\Keep\\photo2.jpg"),
+            name: "photo2.jpg".into(),
+            size: 600,
+            modified: None,
+            file_id: None,
+            is_hardlink: false,
+            is_system_protected: false,
+            is_selected: false,
+        };
+        let occ2_b = DuplicateOccurrence {
+            path: PathBuf::from("C:\\Sync\\photo2.jpg"),
+            name: "photo2.jpg".into(),
+            size: 600,
+            modified: None,
+            file_id: None,
+            is_hardlink: false,
+            is_system_protected: false,
+            is_selected: false, // Unselected candidate in same folder pair
+        };
+
+        let cluster1 = DuplicateCluster {
+            cluster_id: "c1".into(),
+            primary_name: "photo1.jpg".into(),
+            file_size: 500,
+            hash: None,
+            is_group_selected: false,
+            occurrences: vec![occ1_a, occ1_b],
+        };
+        let cluster2 = DuplicateCluster {
+            cluster_id: "c2".into(),
+            primary_name: "photo2.jpg".into(),
+            file_size: 600,
+            hash: None,
+            is_group_selected: false,
+            occurrences: vec![occ2_a, occ2_b],
+        };
+
+        let clusters = vec![cluster1, cluster2];
+        let mut selected = HashSet::new();
+        selected.insert(PathBuf::from("C:\\Sync\\photo1.jpg"));
+
+        let sugg = DuplicateEngine::find_folder_suggestion(&clusters, &selected).expect("Must find folder pattern suggestion");
+        assert_eq!(sugg.folder_path, PathBuf::from("C:\\Sync"));
+        assert_eq!(sugg.candidate_paths, vec![PathBuf::from("C:\\Sync\\photo2.jpg")]);
+        assert_eq!(sugg.reclaimable_bytes, 600);
+        assert!(sugg.message.contains("Pattern Match"));
+        assert!(sugg.message.contains("Sync"));
+        assert!(sugg.message.contains("Keep"));
     }
 }

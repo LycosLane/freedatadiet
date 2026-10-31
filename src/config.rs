@@ -255,6 +255,88 @@ impl Default for CategoryFilterConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExcludeScope {
+    #[default]
+    HideFromScan,
+    IgnoreForDuplicates,
+}
+
+impl ExcludeScope {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ExcludeScope::HideFromScan => "Hide from Scan",
+            ExcludeScope::IgnoreForDuplicates => "Ignore for Duplicates",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExcludedLocation {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+    #[serde(default)]
+    pub scope: ExcludeScope,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DuplicateRulePreference {
+    #[default]
+    Off,
+    KeepOldest,
+    KeepNewest,
+    KeepFirst,
+}
+
+impl DuplicateRulePreference {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DuplicateRulePreference::Off => "Off",
+            DuplicateRulePreference::KeepOldest => "Keep Oldest",
+            DuplicateRulePreference::KeepNewest => "Keep Newest",
+            DuplicateRulePreference::KeepFirst => "Keep First",
+        }
+    }
+
+    pub fn cycle(&self) -> Self {
+        match self {
+            DuplicateRulePreference::Off => DuplicateRulePreference::KeepOldest,
+            DuplicateRulePreference::KeepOldest => DuplicateRulePreference::KeepNewest,
+            DuplicateRulePreference::KeepNewest => DuplicateRulePreference::KeepFirst,
+            DuplicateRulePreference::KeepFirst => DuplicateRulePreference::Off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryDuplicateRules {
+    #[serde(default)]
+    pub images: DuplicateRulePreference,
+    #[serde(default)]
+    pub videos: DuplicateRulePreference,
+    #[serde(default)]
+    pub audio: DuplicateRulePreference,
+    #[serde(default)]
+    pub documents: DuplicateRulePreference,
+    #[serde(default)]
+    pub archives: DuplicateRulePreference,
+}
+
+impl Default for CategoryDuplicateRules {
+    fn default() -> Self {
+        Self {
+            images: DuplicateRulePreference::KeepOldest,
+            videos: DuplicateRulePreference::KeepOldest,
+            audio: DuplicateRulePreference::KeepNewest,
+            documents: DuplicateRulePreference::KeepNewest,
+            archives: DuplicateRulePreference::KeepNewest,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExcludePattern {
     pub pattern: String,
@@ -407,6 +489,12 @@ pub struct AppConfig {
     pub show_sidebar: bool,
     #[serde(default = "default_true")]
     pub show_shortcuts_in_settings: bool,
+    #[serde(default = "default_true")]
+    pub enable_duplicate_suggestions: bool,
+    #[serde(default)]
+    pub category_duplicate_rules: CategoryDuplicateRules,
+    #[serde(default)]
+    pub excluded_locations: Vec<ExcludedLocation>,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
 }
@@ -440,6 +528,9 @@ impl Default for AppConfig {
             theme: AppTheme::Dark,
             show_sidebar: true,
             show_shortcuts_in_settings: true,
+            enable_duplicate_suggestions: true,
+            category_duplicate_rules: CategoryDuplicateRules::default(),
+            excluded_locations: Vec::new(),
             ui_scale: 1.0,
         }
     }
@@ -580,5 +671,21 @@ mod tests {
         assert!(migrated.category_filters.show_images);
         assert!(migrated.duplicate_criteria.match_size);
         assert!(!migrated.show_duplicates_only);
+        assert!(migrated.enable_duplicate_suggestions);
+        assert_eq!(migrated.category_duplicate_rules.images, DuplicateRulePreference::KeepOldest);
+        assert!(migrated.excluded_locations.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_rule_cycle() {
+        let rule = DuplicateRulePreference::Off;
+        let rule = rule.cycle();
+        assert_eq!(rule, DuplicateRulePreference::KeepOldest);
+        let rule = rule.cycle();
+        assert_eq!(rule, DuplicateRulePreference::KeepNewest);
+        let rule = rule.cycle();
+        assert_eq!(rule, DuplicateRulePreference::KeepFirst);
+        let rule = rule.cycle();
+        assert_eq!(rule, DuplicateRulePreference::Off);
     }
 }

@@ -234,29 +234,41 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
     }
 }
 
-fn matches_exclude(name: &str, excludes: &[String]) -> bool {
-    let lower = name.to_lowercase();
+fn matches_exclude(name: &str, path: &Path, excludes: &[String]) -> bool {
+    let lower_name = name.to_lowercase();
+    let path_str = path.to_string_lossy().to_lowercase();
+    let norm_path = path_str.replace('\\', "/");
+
     for ex in excludes {
         let pattern = ex.trim().to_lowercase();
         if pattern.is_empty() {
             continue;
         }
 
+        // Path-based exclusion check
+        if pattern.contains('/') || pattern.contains('\\') {
+            let norm_pattern = pattern.replace('\\', "/");
+            let norm_pattern = norm_pattern.trim_end_matches('/');
+            if norm_path == norm_pattern || norm_path.starts_with(&format!("{}/", norm_pattern)) {
+                return true;
+            }
+        }
+
         // Wildcard support: *pattern*, *suffix, prefix*, or exact match
         if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 2 {
             let substr = &pattern[1..pattern.len() - 1];
-            if lower.contains(substr) {
+            if lower_name.contains(substr) {
                 return true;
             }
         } else if let Some(suffix) = pattern.strip_prefix('*') {
-            if lower.ends_with(suffix) {
+            if lower_name.ends_with(suffix) {
                 return true;
             }
         } else if let Some(prefix) = pattern.strip_suffix('*') {
-            if lower.starts_with(prefix) {
+            if lower_name.starts_with(prefix) {
                 return true;
             }
-        } else if lower == pattern {
+        } else if lower_name == pattern {
             return true;
         }
     }
@@ -340,7 +352,7 @@ fn process_single_entry(
         }
 
         // If this directory itself is excluded, skip walking children
-        if matches_exclude(name, excludes) {
+        if matches_exclude(name, path, excludes) {
             let size = metadata.len();
             let allocated = get_allocated_size(path, size);
             return FileEntry::new(
@@ -387,7 +399,7 @@ fn process_single_entry(
                             let sub_name = e.file_name().to_string_lossy().to_string();
 
                             // Check excludes on subfolders
-                            if matches_exclude(&sub_name, excludes) {
+                            if matches_exclude(&sub_name, &sub_path, excludes) {
                                 continue;
                             }
 
@@ -532,10 +544,10 @@ fn scan_flattened(
                 }
                 if let Ok(entry) = entry_res {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if matches_exclude(&name, &excludes) {
+                    let path = entry.path();
+                    if matches_exclude(&name, &path, &excludes) {
                         continue;
                     }
-                    let path = entry.path();
                     let meta_opt = fs::symlink_metadata(&path).ok();
                     if let Some(meta) = meta_opt {
                         let is_symlink = meta.file_type().is_symlink();
@@ -702,5 +714,29 @@ fn scan_flattened(
             total_files,
             duration: start_time.elapsed(),
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_matches_exclude_path_and_wildcards() {
+        let excludes = vec![
+            "*cache*".to_string(),
+            "target".to_string(),
+            "C:/Users/lukas/Backups".to_string(),
+        ];
+
+        // Name wildcard
+        assert!(matches_exclude("thumb_cache_dir", Path::new("C:/Data/thumb_cache_dir"), &excludes));
+        assert!(matches_exclude("target", Path::new("C:/Project/target"), &excludes));
+        assert!(!matches_exclude("src", Path::new("C:/Project/src"), &excludes));
+
+        // Path exclusion prefix
+        assert!(matches_exclude("photos", Path::new("C:/Users/lukas/Backups/photos"), &excludes));
+        assert!(matches_exclude("Backups", Path::new("C:\\Users\\lukas\\Backups"), &excludes));
+        assert!(!matches_exclude("photos", Path::new("C:/Users/lukas/Documents/photos"), &excludes));
     }
 }

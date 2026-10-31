@@ -110,6 +110,19 @@ impl FreeDataDietApp {
                     self.recompute_duplicate_stats();
                 }
 
+                if self.config.enable_duplicate_suggestions {
+                    let auto_rules_btn = egui::Button::new(
+                        RichText::new("Apply Category Rules").color(Color32::from_rgb(255, 175, 50)),
+                    );
+                    if ui
+                        .add(auto_rules_btn)
+                        .on_hover_text("Auto-mark copies based on category duplicate rules (Keep Oldest/Newest)")
+                        .clicked()
+                    {
+                        self.apply_category_duplicate_rules();
+                    }
+                }
+
                 if ui
                     .button("Keep First Copy in All")
                     .on_hover_text("Marks all redundant copies for deletion while keeping the first occurrence in each group")
@@ -141,16 +154,11 @@ impl FreeDataDietApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!(
-                                "Duplicate Assistant: Found {} sibling duplicate copies in folder \"{}\" ({} reclaimable).",
-                                sugg.candidate_paths.len(),
-                                sugg.folder_name,
-                                format_size(sugg.reclaimable_bytes)
-                            ))
-                            .strong()
-                            .small(),
+                            RichText::new(&sugg.message)
+                                .strong()
+                                .small(),
                         );
-                        if ui.small_button("Select Copies in Folder (Ctrl+Shift+D)").clicked() {
+                        if ui.small_button(format!("Select Copies in \"{}\"", sugg.folder_name)).clicked() {
                             apply_sugg = true;
                         }
                         if ui.small_button("Dismiss").clicked() {
@@ -219,7 +227,11 @@ impl FreeDataDietApp {
                 ui.spinner();
                 ui.add_space(6.0);
                 let msg = if self.is_finding_duplicates {
-                    "Analyzing and grouping duplicate files...".to_string()
+                    if self.duplicate_progress_text.is_empty() {
+                        "Analyzing and grouping duplicate files...".to_string()
+                    } else {
+                        self.duplicate_progress_text.clone()
+                    }
                 } else {
                     format!("Scanning subfolders for duplicates... {} items analyzed", self.scanned_counter)
                 };
@@ -254,9 +266,12 @@ impl FreeDataDietApp {
             return;
         }
 
-        // Build flat row mapping for virtualized rendering
+        // Build flat row mapping for virtualized rendering (skipping ignored clusters)
         let mut flat_rows: Vec<DuplicateRowItem> = Vec::new();
         for c_idx in 0..self.duplicate_clusters.len() {
+            if self.ignored_cluster_ids.contains(&self.duplicate_clusters[c_idx].cluster_id) {
+                continue;
+            }
             flat_rows.push(DuplicateRowItem::Header(c_idx));
             for o_idx in 0..self.duplicate_clusters[c_idx].occurrences.len() {
                 flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
@@ -268,6 +283,7 @@ impl FreeDataDietApp {
         self.force_scroll_to_selected = false;
         let mut open_context_menu: Option<ActiveContextMenu> = None;
         let mut stats_dirty = false;
+        let mut ignore_cluster_id: Option<String> = None;
         let mut new_warning: Option<(String, Option<PathBuf>)> = None;
 
         let is_main_focus = self.panel_focus == super::ActivePanelFocus::MainView;
@@ -437,6 +453,14 @@ impl FreeDataDietApp {
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui
+                                            .small_button("Ignore for Now")
+                                            .on_hover_text("Hide this duplicate group for the current session")
+                                            .clicked()
+                                        {
+                                            ignore_cluster_id = Some(cluster.cluster_id.clone());
+                                        }
+
+                                        if ui
                                             .small_button("Keep First Copy")
                                             .on_hover_text("Selects all copies for deletion except the first occurrence")
                                             .clicked()
@@ -554,6 +578,15 @@ impl FreeDataDietApp {
                 }
             }
         });
+
+        if let Some(cid) = ignore_cluster_id {
+            self.ignored_cluster_ids.insert(cid);
+            self.status_toast = Some((
+                "Duplicate group ignored for this session".to_string(),
+                std::time::Instant::now(),
+            ));
+            stats_dirty = true;
+        }
 
         if stats_dirty {
             self.update_duplicate_assistant();

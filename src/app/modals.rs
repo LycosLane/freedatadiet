@@ -54,6 +54,8 @@ enum ContextAction {
     Properties,
     MoveToTrash,
     DeletePermanently,
+    IgnoreFolderForDuplicates,
+    HideFolderFromScan,
 }
 
 struct ContextMenuItem {
@@ -115,6 +117,16 @@ fn get_context_menu_items(entry: &ActiveContextMenu, is_favorite: bool) -> Vec<C
         action: ContextAction::DeletePermanently,
         label: "Delete Permanently".to_string(),
         color: Some(Color32::from_rgb(255, 100, 100)),
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::IgnoreFolderForDuplicates,
+        label: "Ignore Folder for Duplicates (Permanent)".to_string(),
+        color: Some(Color32::from_rgb(255, 175, 60)),
+    });
+    items.push(ContextMenuItem {
+        action: ContextAction::HideFolderFromScan,
+        label: "Hide Folder from Scan (Permanent)".to_string(),
+        color: Some(Color32::from_rgb(160, 200, 255)),
     });
     items
 }
@@ -192,7 +204,10 @@ impl FreeDataDietApp {
                 ui.separator();
 
                 for (idx, item) in items.iter().enumerate() {
-                    if item.action == ContextAction::CopyName || item.action == ContextAction::MoveToTrash {
+                    if item.action == ContextAction::CopyName
+                        || item.action == ContextAction::MoveToTrash
+                        || item.action == ContextAction::IgnoreFolderForDuplicates
+                    {
                         ui.separator();
                     }
 
@@ -305,6 +320,91 @@ impl FreeDataDietApp {
                             is_system: menu.is_system_protected,
                         };
                         self.modal_focus = DeleteModalFocus::Permanent;
+                    }
+                    ContextAction::IgnoreFolderForDuplicates => {
+                        let target_folder = if menu.is_dir {
+                            menu.path.clone()
+                        } else {
+                            menu.path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| menu.path.clone())
+                        };
+                        let folder_name = target_folder
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| target_folder.to_string_lossy().to_string());
+
+                        let id = format!(
+                            "ign_dup_{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0)
+                        );
+                        if !self
+                            .config
+                            .excluded_locations
+                            .iter()
+                            .any(|loc| loc.path == target_folder && loc.scope == crate::config::ExcludeScope::IgnoreForDuplicates)
+                        {
+                            self.config.excluded_locations.push(crate::config::ExcludedLocation {
+                                id,
+                                name: folder_name.clone(),
+                                path: target_folder.clone(),
+                                scope: crate::config::ExcludeScope::IgnoreForDuplicates,
+                                enabled: true,
+                            });
+                            self.save_config();
+                        }
+
+                        // Remove occurrences from duplicate clusters immediately
+                        for cluster in &mut self.duplicate_clusters {
+                            cluster.occurrences.retain(|o| !o.path.starts_with(&target_folder));
+                        }
+                        self.duplicate_clusters.retain(|c| c.occurrences.len() >= 2);
+                        self.recompute_duplicate_stats();
+                        self.update_duplicate_assistant();
+                        self.status_toast = Some((
+                            format!("Permanently ignored folder for duplicates: {}", folder_name),
+                            Instant::now(),
+                        ));
+                    }
+                    ContextAction::HideFolderFromScan => {
+                        let target_folder = if menu.is_dir {
+                            menu.path.clone()
+                        } else {
+                            menu.path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| menu.path.clone())
+                        };
+                        let folder_name = target_folder
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| target_folder.to_string_lossy().to_string());
+
+                        let id = format!(
+                            "hide_scan_{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0)
+                        );
+                        if !self
+                            .config
+                            .excluded_locations
+                            .iter()
+                            .any(|loc| loc.path == target_folder && loc.scope == crate::config::ExcludeScope::HideFromScan)
+                        {
+                            self.config.excluded_locations.push(crate::config::ExcludedLocation {
+                                id,
+                                name: folder_name.clone(),
+                                path: target_folder.clone(),
+                                scope: crate::config::ExcludeScope::HideFromScan,
+                                enabled: true,
+                            });
+                            self.save_config();
+                        }
+                        self.status_toast = Some((
+                            format!("Folder added to scan exclusions: {}", folder_name),
+                            Instant::now(),
+                        ));
+                        self.trigger_scan();
                     }
                 }
             }
@@ -429,24 +529,25 @@ impl FreeDataDietApp {
                         let do_perm = ui.add_enabled(!del_blocked, perm_btn).clicked() || (is_perm && modal_enter && !del_blocked);
                         let do_cancel = ui.add(cancel_btn).clicked() || (is_cancel && modal_enter);
 
+                        let mut deleted_paths: Vec<PathBuf> = Vec::new();
+
                         if do_trash {
                             match &state_clone {
                                 DeleteConfirmState::Confirm { path, .. } => {
                                     if let Err(e) = trash::delete(path) {
                                         modal_error = Some(format!("Trash Error: {}", e));
                                     } else {
-                                        trigger_rescan = true;
+                                        deleted_paths.push(path.clone());
+                                        modal_toast = Some("Moved item to Trash".to_string());
                                     }
                                 }
                                 DeleteConfirmState::Batch { paths, .. } => {
-                                    let mut deleted = 0usize;
                                     for p in paths {
                                         if !crate::model::is_root_or_system(p) && trash::delete(p).is_ok() {
-                                            deleted += 1;
+                                            deleted_paths.push(p.clone());
                                         }
                                     }
-                                    modal_toast = Some(format!("Moved {} items to Trash", deleted));
-                                    trigger_rescan = true;
+                                    modal_toast = Some(format!("Moved {} items to Trash", deleted_paths.len()));
                                 }
                                 DeleteConfirmState::None => {}
                             }
@@ -457,24 +558,56 @@ impl FreeDataDietApp {
                                     if let Err(e) = delete_path_permanently(path) {
                                         modal_error = Some(format!("Delete Error: {}", e));
                                     } else {
-                                        trigger_rescan = true;
+                                        deleted_paths.push(path.clone());
+                                        modal_toast = Some("Permanently deleted item".to_string());
                                     }
                                 }
                                 DeleteConfirmState::Batch { paths, .. } => {
-                                    let mut deleted = 0usize;
                                     for p in paths {
                                         if !crate::model::is_root_or_system(p) && delete_path_permanently(p).is_ok() {
-                                            deleted += 1;
+                                            deleted_paths.push(p.clone());
                                         }
                                     }
-                                    modal_toast = Some(format!("Permanently deleted {} items", deleted));
-                                    trigger_rescan = true;
+                                    modal_toast = Some(format!("Permanently deleted {} items", deleted_paths.len()));
                                 }
                                 DeleteConfirmState::None => {}
                             }
                             close_modal = true;
                         } else if do_cancel {
                             close_modal = true;
+                        }
+
+                        if !deleted_paths.is_empty() {
+                            if self.config.show_duplicates_only {
+                                let del_set: std::collections::HashSet<PathBuf> = deleted_paths.iter().cloned().collect();
+                                let mut candidate_parents: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+                                for p in &deleted_paths {
+                                    if let Some(parent) = p.parent() {
+                                        candidate_parents.insert(parent.to_path_buf());
+                                    }
+                                }
+
+                                for cluster in &mut self.duplicate_clusters {
+                                    cluster.occurrences.retain(|o| !del_set.contains(&o.path));
+                                }
+                                self.duplicate_clusters.retain(|c| c.occurrences.len() >= 2);
+                                self.entries.retain(|e| !del_set.contains(&e.path));
+                                self.recompute_duplicate_stats();
+                                self.update_duplicate_assistant();
+                                self.visible_indices_dirty = true;
+
+                                let mut empty_parents: Vec<PathBuf> = Vec::new();
+                                for parent in candidate_parents {
+                                    if parent.exists() && std::fs::read_dir(&parent).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                                        empty_parents.push(parent);
+                                    }
+                                }
+                                if !empty_parents.is_empty() {
+                                    self.empty_folders_prompt = Some(empty_parents);
+                                }
+                            } else {
+                                trigger_rescan = true;
+                            }
                         }
                     });
                 });
@@ -491,6 +624,71 @@ impl FreeDataDietApp {
         }
         if trigger_rescan {
             self.trigger_scan();
+        }
+
+        // --- EMPTY FOLDER CLEANUP MODAL ---
+        if let Some(empty_folders) = &self.empty_folders_prompt.clone() {
+            let mut close_empty_modal = false;
+            let mut delete_empty = false;
+            let mut open_empty: Option<PathBuf> = None;
+
+            egui::Window::new("Clean Up Empty Folders")
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    ui.set_width(420.0);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("The following folder is now empty after deleting duplicate files:")
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+
+                    for p in empty_folders {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(p.to_string_lossy()).small());
+                            if ui.small_button("Open").on_hover_text("Open folder in file explorer").clicked() {
+                                open_empty = Some(p.clone());
+                            }
+                        });
+                    }
+
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(RichText::new("Delete Empty Folder(s)").color(Color32::from_rgb(255, 120, 120)))
+                            .clicked()
+                        {
+                            delete_empty = true;
+                        }
+                        if ui.button("Keep Folder(s)").clicked() {
+                            close_empty_modal = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+                });
+
+            if let Some(target) = open_empty {
+                let _ = platform::open_in_file_manager(&target);
+            }
+            if delete_empty {
+                let mut deleted_count = 0usize;
+                for p in empty_folders {
+                    if std::fs::remove_dir(p).is_ok() || trash::delete(p).is_ok() {
+                        deleted_count += 1;
+                    }
+                }
+                self.status_toast = Some((
+                    format!("Cleaned up {} empty folder(s)", deleted_count),
+                    Instant::now(),
+                ));
+                close_empty_modal = true;
+            }
+            if close_empty_modal {
+                self.empty_folders_prompt = None;
+            }
         }
 
         // --- KEYBOARD SHORTCUTS POPUP (FROM 9d69210) ---

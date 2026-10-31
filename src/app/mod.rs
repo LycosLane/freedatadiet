@@ -50,12 +50,15 @@ pub struct FreeDataDietApp {
     pub(super) safety_warning: Option<(String, Option<PathBuf>)>,
     pub(super) cancel_duplicate_hashing: Arc<AtomicBool>,
     pub(super) is_finding_duplicates: bool,
-    pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<Vec<DuplicateCluster>>>,
+    pub(super) duplicate_progress_text: String,
+    pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<crate::duplicate::DuplicateMessage>>,
     pub(super) duplicate_total_wasted: u64,
     pub(super) duplicate_eligible_count: usize,
     pub(super) duplicate_eligible_bytes: u64,
     pub(super) duplicate_blocked_count: usize,
     pub(super) selected_duplicate_row_idx: usize,
+    pub(super) ignored_cluster_ids: std::collections::HashSet<String>,
+    pub(super) empty_folders_prompt: Option<Vec<PathBuf>>,
 
     // Drive root confirmation modal
     pub(super) show_root_subfolder_confirm: bool,
@@ -137,12 +140,15 @@ impl FreeDataDietApp {
             safety_warning: None,
             cancel_duplicate_hashing: Arc::new(AtomicBool::new(false)),
             is_finding_duplicates: false,
+            duplicate_progress_text: String::new(),
             duplicate_receiver: None,
             duplicate_total_wasted: 0,
             duplicate_eligible_count: 0,
             duplicate_eligible_bytes: 0,
             duplicate_blocked_count: 0,
             selected_duplicate_row_idx: 0,
+            ignored_cluster_ids: std::collections::HashSet::new(),
+            empty_folders_prompt: None,
             show_root_subfolder_confirm: false,
             last_scan_sort: Instant::now(),
             visible_indices: Vec::new(),
@@ -245,6 +251,16 @@ impl FreeDataDietApp {
             }
         }
 
+        // 6. Excluded Locations (Hide from Scan)
+        for loc in &self.config.excluded_locations {
+            if loc.enabled && loc.scope == crate::config::ExcludeScope::HideFromScan {
+                let path_str = loc.path.to_string_lossy().to_string();
+                if !list.iter().any(|existing| existing.eq_ignore_ascii_case(&path_str)) {
+                    list.push(path_str);
+                }
+            }
+        }
+
         list
     }
 
@@ -304,15 +320,29 @@ impl FreeDataDietApp {
         self.active_suggestion = None;
         self.safety_warning = None;
         self.is_finding_duplicates = true;
+        self.duplicate_progress_text = "Starting duplicate scan...".to_string();
 
-        let entries_clone = self.entries.clone();
+        let ignore_dup_paths: Vec<PathBuf> = self
+            .config
+            .excluded_locations
+            .iter()
+            .filter(|l| l.enabled && l.scope == crate::config::ExcludeScope::IgnoreForDuplicates)
+            .map(|l| l.path.clone())
+            .collect();
+
+        let entries_clone: Vec<FileEntry> = self
+            .entries
+            .iter()
+            .filter(|e| !ignore_dup_paths.iter().any(|ignored| e.path.starts_with(ignored)))
+            .cloned()
+            .collect();
+
         let criteria = self.config.duplicate_criteria;
         let cancel = Arc::clone(&self.cancel_duplicate_hashing);
         let (tx, rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
-            let clusters = DuplicateEngine::find_duplicates(&entries_clone, criteria, &cancel);
-            let _ = tx.send(clusters);
+            let _ = DuplicateEngine::find_duplicates(&entries_clone, criteria, &cancel, Some(&tx));
         });
 
         self.duplicate_receiver = Some(rx);
@@ -325,6 +355,9 @@ impl FreeDataDietApp {
         let mut blocked_count = 0usize;
 
         for cluster in &self.duplicate_clusters {
+            if self.ignored_cluster_ids.contains(&cluster.cluster_id) {
+                continue;
+            }
             total_wasted += cluster.wasted_bytes();
             if cluster.are_all_copies_selected() && !cluster.is_group_selected {
                 blocked_count += 1;
@@ -339,6 +372,79 @@ impl FreeDataDietApp {
         self.duplicate_eligible_count = eligible_count;
         self.duplicate_eligible_bytes = eligible_bytes;
         self.duplicate_blocked_count = blocked_count;
+    }
+
+    pub(super) fn apply_category_duplicate_rules(&mut self) {
+        if !self.config.enable_duplicate_suggestions {
+            return;
+        }
+        let rules = self.config.category_duplicate_rules;
+        for cluster in &mut self.duplicate_clusters {
+            if self.ignored_cluster_ids.contains(&cluster.cluster_id) {
+                continue;
+            }
+            let cat = crate::model::FileCategory::from_path_and_dir(
+                std::path::Path::new(&cluster.primary_name),
+                false,
+            );
+            let pref = match cat {
+                crate::model::FileCategory::Image => rules.images,
+                crate::model::FileCategory::Video => rules.videos,
+                crate::model::FileCategory::Audio => rules.audio,
+                crate::model::FileCategory::Document => rules.documents,
+                crate::model::FileCategory::Archive => rules.archives,
+                crate::model::FileCategory::Other | crate::model::FileCategory::Folder => {
+                    crate::config::DuplicateRulePreference::Off
+                }
+            };
+
+            if pref == crate::config::DuplicateRulePreference::Off {
+                continue;
+            }
+
+            cluster.is_group_selected = false;
+            match pref {
+                crate::config::DuplicateRulePreference::KeepFirst => {
+                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
+                        occ.is_selected = i > 0 && !occ.is_system_protected;
+                    }
+                }
+                crate::config::DuplicateRulePreference::KeepOldest => {
+                    let mut oldest_idx = 0;
+                    let mut oldest_time = cluster.occurrences[0].modified;
+                    for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
+                        if let (Some(cur), Some(oldest)) = (occ.modified, oldest_time) {
+                            if cur < oldest {
+                                oldest_time = Some(cur);
+                                oldest_idx = i;
+                            }
+                        }
+                    }
+                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
+                        occ.is_selected = (i != oldest_idx) && !occ.is_system_protected;
+                    }
+                }
+                crate::config::DuplicateRulePreference::KeepNewest => {
+                    let mut newest_idx = 0;
+                    let mut newest_time = cluster.occurrences[0].modified;
+                    for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
+                        if let (Some(cur), Some(newest)) = (occ.modified, newest_time) {
+                            if cur > newest {
+                                newest_time = Some(cur);
+                                newest_idx = i;
+                            }
+                        }
+                    }
+                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
+                        occ.is_selected = (i != newest_idx) && !occ.is_system_protected;
+                    }
+                }
+                crate::config::DuplicateRulePreference::Off => {}
+            }
+        }
+        self.safety_warning = None;
+        self.update_duplicate_assistant();
+        self.recompute_duplicate_stats();
     }
 
     pub(super) fn update_visible_indices(&mut self) {
@@ -389,8 +495,18 @@ impl FreeDataDietApp {
     }
 
     pub(super) fn update_duplicate_assistant(&mut self) {
+        if !self.config.enable_duplicate_suggestions {
+            self.active_suggestion = None;
+            return;
+        }
+        let active_clusters: Vec<DuplicateCluster> = self
+            .duplicate_clusters
+            .iter()
+            .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
+            .cloned()
+            .collect();
         let mut selected_set = std::collections::HashSet::new();
-        for cluster in &self.duplicate_clusters {
+        for cluster in &active_clusters {
             for occ in &cluster.occurrences {
                 if occ.is_selected {
                     selected_set.insert(occ.path.clone());
@@ -398,7 +514,7 @@ impl FreeDataDietApp {
             }
         }
         self.active_suggestion = DuplicateEngine::find_folder_suggestion(
-            &self.duplicate_clusters,
+            &active_clusters,
             &selected_set,
         );
     }
@@ -482,12 +598,27 @@ impl FreeDataDietApp {
 
         if self.is_finding_duplicates {
             if let Some(rx) = &self.duplicate_receiver {
-                if let Ok(clusters) = rx.try_recv() {
-                    self.duplicate_clusters = clusters;
-                    self.is_finding_duplicates = false;
-                    self.duplicate_receiver = None;
-                    self.update_duplicate_assistant();
-                    self.recompute_duplicate_stats();
+                while let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        crate::duplicate::DuplicateMessage::Progress { stage, done, total } => {
+                            if total > 0 {
+                                self.duplicate_progress_text = format!("{} {} / {}", stage, done, total);
+                            } else {
+                                self.duplicate_progress_text = stage;
+                            }
+                        }
+                        crate::duplicate::DuplicateMessage::Completed(clusters) => {
+                            self.duplicate_clusters = clusters;
+                            self.is_finding_duplicates = false;
+                            self.duplicate_receiver = None;
+                            if self.config.enable_duplicate_suggestions {
+                                self.apply_category_duplicate_rules();
+                            }
+                            self.update_duplicate_assistant();
+                            self.recompute_duplicate_stats();
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -910,6 +1041,14 @@ impl eframe::App for FreeDataDietApp {
                     ui.label(RichText::new(toast).color(Color32::from_rgb(100, 220, 150)).strong());
                 } else if let Some(err) = &self.error_message {
                     ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)));
+                } else if self.is_finding_duplicates {
+                    ui.spinner();
+                    ui.label(RichText::new(&self.duplicate_progress_text).color(Color32::from_rgb(255, 180, 60)).strong());
+                    if ui.small_button("Cancel").clicked() {
+                        self.cancel_duplicate_hashing.store(true, Ordering::Relaxed);
+                        self.is_finding_duplicates = false;
+                        self.duplicate_receiver = None;
+                    }
                 } else if self.is_scanning {
                     ui.spinner();
                     ui.label(format!(
@@ -926,6 +1065,17 @@ impl eframe::App for FreeDataDietApp {
                             e.is_scanning = false;
                         }
                     }
+                } else if self.config.show_duplicates_only {
+                    let active_clusters_count = self
+                        .duplicate_clusters
+                        .iter()
+                        .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
+                        .count();
+                    ui.label(RichText::new(format!(
+                        "Duplicate Search Complete: {} groups  |  Wasted Space: {}",
+                        active_clusters_count,
+                        format_size(self.duplicate_total_wasted)
+                    )).small());
                 } else if let Some(summary) = &self.summary {
                     ui.label(RichText::new(format!(
                         "Scanned in {:.2}s  |  {} items  |  Total: {} (On Disk: {})",
@@ -938,13 +1088,23 @@ impl eframe::App for FreeDataDietApp {
                     ui.label("Ready");
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new("[Up/Down] Navigate  |  [Enter] Open  |  [Backspace] Up  |  [Del] Trash  |  [F1] Help  |  [F5] Rescan  |  [F12] Settings")
-                            .small()
-                            .color(if is_dark { Color32::DARK_GRAY } else { Color32::from_rgb(120, 120, 120) }),
-                    );
-                });
+                let avail_width = ui.available_width();
+                if avail_width > 200.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let hint = if avail_width > 550.0 {
+                            "[Up/Down] Navigate  |  [Enter] Open  |  [Backspace] Up  |  [Del] Trash  |  [F1] Help  |  [F5] Rescan  |  [F12] Settings"
+                        } else if avail_width > 350.0 {
+                            "[Enter] Open  |  [Backspace] Up  |  [Del] Trash  |  [F12] Settings"
+                        } else {
+                            "[F1] Help  |  [F12] Settings"
+                        };
+                        ui.label(
+                            RichText::new(hint)
+                                .small()
+                                .color(if is_dark { Color32::DARK_GRAY } else { Color32::from_rgb(120, 120, 120) }),
+                        );
+                    });
+                }
             });
             ui.add_space(4.0);
         });

@@ -395,6 +395,27 @@ impl FreeDataDietApp {
                     trigger_rescan = true;
                 }
 
+                ui.add_space(3.0);
+                let pill_sugg = setting_pill(
+                    ui,
+                    self.config.enable_duplicate_suggestions,
+                    false,
+                    "Duplicate Recommendations",
+                    None,
+                    false,
+                    true,
+                    is_dark,
+                ).on_hover_text("Enable smart auto-selection rules (Keep Oldest/Newest) and folder-pair pattern matching");
+                if pill_sugg.clicked() {
+                    self.config.enable_duplicate_suggestions = !self.config.enable_duplicate_suggestions;
+                    self.save_config();
+                    if self.config.enable_duplicate_suggestions {
+                        self.apply_category_duplicate_rules();
+                    } else {
+                        self.active_suggestion = None;
+                    }
+                }
+
                 ui.add_space(4.0);
                 ui.label(RichText::new("Duplicate Matching Criteria:").weak().small());
 
@@ -500,6 +521,83 @@ impl FreeDataDietApp {
                     });
                 }
 
+                // --- 5B. IGNORED & EXCLUDED LOCATIONS ---
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Ignored Locations").size(13.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("+ Add Folder...").on_hover_text("Add a folder to scan exclusions or duplicate ignore list").clicked() {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                let folder_name = folder
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| folder.to_string_lossy().to_string());
+                                let id = format!("excl_loc_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                                self.config.excluded_locations.push(crate::config::ExcludedLocation {
+                                    id,
+                                    name: folder_name,
+                                    path: folder,
+                                    scope: crate::config::ExcludeScope::IgnoreForDuplicates,
+                                    enabled: true,
+                                });
+                                self.save_config();
+                                if self.config.show_duplicates_only {
+                                    recompute_dups = true;
+                                }
+                            }
+                        }
+                    });
+                });
+                ui.label(RichText::new("Click scope badge to switch between Hide and Ignore Duplicates").weak().small());
+                ui.add_space(2.0);
+
+                let mut remove_excl_idx = None;
+                let mut excl_changed = false;
+
+                for (e_idx, loc) in self.config.excluded_locations.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut loc.enabled, "").changed() {
+                            excl_changed = true;
+                        }
+                        ui.label(RichText::new(&loc.name).strong()).on_hover_text(loc.path.to_string_lossy());
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("x").on_hover_text("Remove location from ignored list").clicked() {
+                                remove_excl_idx = Some(e_idx);
+                            }
+
+                            let (scope_txt, scope_col) = match loc.scope {
+                                crate::config::ExcludeScope::HideFromScan => ("Hide", Color32::from_rgb(100, 180, 255)),
+                                crate::config::ExcludeScope::IgnoreForDuplicates => ("Ignore Dups", Color32::from_rgb(255, 175, 50)),
+                            };
+                            let scope_btn = egui::Button::new(
+                                RichText::new(format!("[{}]", scope_txt)).small().color(scope_col),
+                            );
+                            if ui.add(scope_btn).on_hover_text("Toggle scope: Hide completely from scan vs Ignore for duplicates only").clicked() {
+                                loc.scope = match loc.scope {
+                                    crate::config::ExcludeScope::HideFromScan => crate::config::ExcludeScope::IgnoreForDuplicates,
+                                    crate::config::ExcludeScope::IgnoreForDuplicates => crate::config::ExcludeScope::HideFromScan,
+                                };
+                                excl_changed = true;
+                            }
+                        });
+                    });
+                }
+
+                if let Some(idx) = remove_excl_idx {
+                    self.config.excluded_locations.remove(idx);
+                    excl_changed = true;
+                }
+
+                if excl_changed {
+                    self.save_config();
+                    if self.config.show_duplicates_only {
+                        recompute_dups = true;
+                    } else {
+                        trigger_rescan = true;
+                    }
+                }
+
                 ui.add_space(6.0);
                 ui.separator();
 
@@ -520,28 +618,53 @@ impl FreeDataDietApp {
                 ui.add_space(2.0);
 
                 let mut cat_changed = false;
+                let show_dup_rules = self.config.show_duplicates_only && self.config.enable_duplicate_suggestions;
+
                 let cat_items = [
-                    (9, "Scan Images", self.config.category_filters.show_images),
-                    (10, "Scan Videos", self.config.category_filters.show_videos),
-                    (11, "Scan Audio", self.config.category_filters.show_audio),
-                    (12, "Scan Documents", self.config.category_filters.show_documents),
-                    (13, "Scan Archives", self.config.category_filters.show_archives),
+                    (9, "Scan Images", self.config.category_filters.show_images, self.config.category_duplicate_rules.images),
+                    (10, "Scan Videos", self.config.category_filters.show_videos, self.config.category_duplicate_rules.videos),
+                    (11, "Scan Audio", self.config.category_filters.show_audio, self.config.category_duplicate_rules.audio),
+                    (12, "Scan Documents", self.config.category_filters.show_documents, self.config.category_duplicate_rules.documents),
+                    (13, "Scan Archives", self.config.category_filters.show_archives, self.config.category_duplicate_rules.archives),
                 ];
 
-                for (idx, label, val) in cat_items {
+                for (idx, label, val, rule) in cat_items {
                     let is_f = is_panel_focused && self.settings_nav_idx == idx;
-                    let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
-                    if pill.clicked() || (is_f && key_activate) {
-                        match idx {
-                            9 => self.config.category_filters.show_images = !val,
-                            10 => self.config.category_filters.show_videos = !val,
-                            11 => self.config.category_filters.show_audio = !val,
-                            12 => self.config.category_filters.show_documents = !val,
-                            13 => self.config.category_filters.show_archives = !val,
-                            _ => {}
+                    ui.horizontal(|ui| {
+                        let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
+                        if pill.clicked() || (is_f && key_activate) {
+                            match idx {
+                                9 => self.config.category_filters.show_images = !val,
+                                10 => self.config.category_filters.show_videos = !val,
+                                11 => self.config.category_filters.show_audio = !val,
+                                12 => self.config.category_filters.show_documents = !val,
+                                13 => self.config.category_filters.show_archives = !val,
+                                _ => {}
+                            }
+                            cat_changed = true;
                         }
-                        cat_changed = true;
-                    }
+
+                        if show_dup_rules {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let badge_btn = egui::Button::new(
+                                    RichText::new(format!("[{}]", rule.label())).small().color(Color32::from_rgb(255, 175, 50)),
+                                );
+                                if ui.add(badge_btn).on_hover_text("Click to cycle duplicate auto-rule (Keep Oldest / Keep Newest / Keep First / Off)").clicked() {
+                                    let new_rule = rule.cycle();
+                                    match idx {
+                                        9 => self.config.category_duplicate_rules.images = new_rule,
+                                        10 => self.config.category_duplicate_rules.videos = new_rule,
+                                        11 => self.config.category_duplicate_rules.audio = new_rule,
+                                        12 => self.config.category_duplicate_rules.documents = new_rule,
+                                        13 => self.config.category_duplicate_rules.archives = new_rule,
+                                        _ => {}
+                                    }
+                                    cat_changed = true;
+                                    self.apply_category_duplicate_rules();
+                                }
+                            });
+                        }
+                    });
                 }
 
                 if cat_changed {
