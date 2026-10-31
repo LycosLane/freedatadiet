@@ -403,7 +403,7 @@ impl FreeDataDietApp {
                     (2, "Match same file size", self.config.duplicate_criteria.match_size),
                     (3, "Match same file name", self.config.duplicate_criteria.match_name),
                     (4, "Match modification timestamp", self.config.duplicate_criteria.match_timestamp),
-                    (5, "Verify bit-exact SHA-256 hash", self.config.duplicate_criteria.verify_hash),
+                    (5, "Match bit-exact SHA-256 hash", self.config.duplicate_criteria.verify_hash),
                 ];
 
                 for (idx, label, val) in criteria_items {
