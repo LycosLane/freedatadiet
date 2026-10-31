@@ -21,9 +21,47 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let rc_path = PathBuf::from(&out_dir).join("freedatadiet.rc");
 
-    // Standard Windows RC format
+    // Standard Windows RC format with icon and VERSIONINFO
     let ico_path_str = ico_path.to_str().unwrap().replace('\\', "/");
-    let rc_content = format!("MAINICON ICON \"{}\"\n", ico_path_str);
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "1.3.1".to_string());
+    let mut version_parts = version.split('.');
+    let major: u16 = version_parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let minor: u16 = version_parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let patch: u16 = version_parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+
+    let rc_content = format!(
+        r#"MAINICON ICON "{ico_path_str}"
+
+1 VERSIONINFO
+FILEVERSION {major},{minor},{patch},0
+PRODUCTVERSION {major},{minor},{patch},0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "LycosLane"
+            VALUE "FileDescription", "FreeDataDiet - Disk Usage Analyzer"
+            VALUE "FileVersion", "{version}.0"
+            VALUE "InternalName", "freedatadiet"
+            VALUE "LegalCopyright", "Copyright (c) 2026 LycosLane"
+            VALUE "OriginalFilename", "freedatadiet.exe"
+            VALUE "ProductName", "FreeDataDiet"
+            VALUE "ProductVersion", "{version}.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+"#
+    );
     if fs::write(&rc_path, rc_content).is_err() {
         return;
     }

@@ -361,6 +361,7 @@ impl FreeDataDietApp {
         }
 
         let mut needs_sort = false;
+        let mut force_immediate_sort = false;
         let mut completed = false;
         let mut needs_duplicates = false;
 
@@ -374,6 +375,8 @@ impl FreeDataDietApp {
                         self.entries.extend(entries);
                     } else {
                         self.entries = entries;
+                        // Always sort and show directory entries immediately upon entering a folder
+                        force_immediate_sort = true;
                     }
                     needs_sort = true;
                 }
@@ -412,8 +415,9 @@ impl FreeDataDietApp {
             }
         }
 
-        // Throttle sorting during active scan to at most once per second so UI stays responsive
+        // Sort immediately for initial directory entries or completion, otherwise throttle to 1000ms
         if completed
+            || force_immediate_sort
             || (needs_sort && self.last_scan_sort.elapsed() > Duration::from_millis(1000))
         {
             self.sort_entries();
