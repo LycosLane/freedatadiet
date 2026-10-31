@@ -360,6 +360,10 @@ pub struct AppConfig {
 
     #[serde(default = "default_true")]
     pub ignore_dev_caches: bool,
+    #[serde(default = "default_true")]
+    pub ignore_media_caches: bool,
+    #[serde(default = "default_true")]
+    pub ignore_temp_caches: bool,
     #[serde(default = "default_custom_excludes")]
     pub custom_excludes: String,
     #[serde(default = "default_excluded_patterns")]
@@ -414,6 +418,8 @@ impl Default for AppConfig {
             column_order: ColumnId::default_order(),
             sort_rules: default_sort_rules(),
             ignore_dev_caches: true,
+            ignore_media_caches: true,
+            ignore_temp_caches: true,
             custom_excludes: default_custom_excludes(),
             excluded_patterns: default_excluded_patterns(),
             saved_locations: default_saved_locations(),

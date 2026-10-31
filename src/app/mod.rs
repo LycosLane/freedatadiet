@@ -74,6 +74,9 @@ pub struct FreeDataDietApp {
 
     // Exclude filters
     pub(super) ignore_dev_caches: bool,
+    pub(super) ignore_media_caches: bool,
+    pub(super) ignore_temp_caches: bool,
+    pub(super) show_custom_excludes_input: bool,
     pub(super) custom_excludes: String,
 
     pub(super) scanner: Option<ScannerHandle>,
@@ -113,6 +116,9 @@ impl FreeDataDietApp {
 
         let mut app = Self {
             ignore_dev_caches: config.ignore_dev_caches,
+            ignore_media_caches: config.ignore_media_caches,
+            ignore_temp_caches: config.ignore_temp_caches,
+            show_custom_excludes_input: false,
             custom_excludes: config.custom_excludes.clone(),
             config,
             location_mgr,
@@ -170,6 +176,8 @@ impl FreeDataDietApp {
 
     pub(super) fn save_config(&mut self) {
         self.config.ignore_dev_caches = self.ignore_dev_caches;
+        self.config.ignore_media_caches = self.ignore_media_caches;
+        self.config.ignore_temp_caches = self.ignore_temp_caches;
         self.config.custom_excludes = self.custom_excludes.clone();
         if self.config.remember_last_path {
             self.config.last_path = Some(self.current_path.clone());
@@ -181,19 +189,64 @@ impl FreeDataDietApp {
 
     pub(super) fn collect_excludes(&self) -> Vec<String> {
         let mut list = Vec::new();
+
+        // 1. Development & Repository Caches
         if self.ignore_dev_caches {
-            for item in self.custom_excludes.split(',') {
-                let trimmed = item.trim();
-                if !trimmed.is_empty() {
-                    list.push(trimmed.to_string());
+            let dev_presets = [
+                ".git", ".svn", ".hg", "node_modules", "target", ".cargo",
+                ".venv", "venv", "__pycache__", ".gradle", ".m2",
+            ];
+            for item in dev_presets {
+                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
+                    list.push(item.to_string());
                 }
             }
         }
+
+        // 2. Application & Media Render Caches
+        if self.ignore_media_caches {
+            let media_presets = [
+                "CacheClip", ".gallery", "OptimizedMedia", "ProxyMedia",
+                "Media Cache Files", "Media Cache", "DerivedDataCache",
+                "ShaderCache", "GPUCache", "DawnCache", "Code Cache",
+                "thumbcache_*.db", "thumbs.db", ".thumbnails",
+            ];
+            for item in media_presets {
+                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
+                    list.push(item.to_string());
+                }
+            }
+        }
+
+        // 3. System & Temporary Files
+        if self.ignore_temp_caches {
+            let temp_presets = [
+                "Temp", "CrashDumps", "Prefetch", "DeliveryOptimization",
+                "$RECYCLE.BIN", "System Volume Information", ".Trash-*",
+                "*.dmp", "*.tmp",
+            ];
+            for item in temp_presets {
+                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
+                    list.push(item.to_string());
+                }
+            }
+        }
+
+        // 4. Custom Excludes from User Input
+        for item in self.custom_excludes.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() && !list.iter().any(|existing| existing.eq_ignore_ascii_case(trimmed)) {
+                list.push(trimmed.to_string());
+            }
+        }
+
+        // 5. Explicit Excluded Patterns from Config
         for p in &self.config.excluded_patterns {
             if p.enabled && !list.iter().any(|existing| existing.eq_ignore_ascii_case(&p.pattern)) {
                 list.push(p.pattern.clone());
             }
         }
+
         list
     }
 

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
+use rayon::prelude::*;
 
 use crate::config::DuplicateCriteriaConfig;
 use crate::model::FileEntry;
@@ -239,36 +240,59 @@ impl DuplicateEngine {
                 continue;
             }
 
-            // Pass 1: 4 KB Prefix Hash
-            let mut prefix_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
-            for file in group {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-                if let Ok(Some(prefix_hash)) = Self::hash_prefix(&file.path, cancel_flag) {
-                    prefix_map.entry(prefix_hash).or_default().push(file);
-                }
+            // Pass 1: 4 KB Prefix Hash (parallelized with rayon)
+            let prefix_results: Vec<Option<([u8; 32], &FileEntry)>> = group
+                .par_iter()
+                .map(|file| {
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    match Self::hash_prefix(&file.path, cancel_flag) {
+                        Ok(Some(hash)) => Some((hash, *file)),
+                        _ => None,
+                    }
+                })
+                .collect();
+
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Vec::new();
             }
 
-            // Pass 2: Full Streaming SHA-256 for survivors
+            let mut prefix_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
+            for item in prefix_results.into_iter().flatten() {
+                prefix_map.entry(item.0).or_default().push(item.1);
+            }
+
+            // Pass 2: Full Streaming SHA-256 for survivors (parallelized with rayon)
             for (prefix_hash, candidates) in prefix_map {
                 if candidates.len() < 2 {
                     continue;
                 }
 
-                let mut full_hash_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
+                let full_results: Vec<Option<([u8; 32], &FileEntry)>> = candidates
+                    .par_iter()
+                    .map(|file| {
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        if file.size <= PREFIX_HASH_LEN as u64 {
+                            Some((prefix_hash, *file))
+                        } else {
+                            match Self::hash_full_file(&file.path, file.size, cancel_flag) {
+                                Ok(Some(hash)) => Some((hash, *file)),
+                                _ => None,
+                            }
+                        }
+                    })
+                    .collect();
 
-                for file in candidates {
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        return Vec::new();
-                    }
-                    if file.size <= PREFIX_HASH_LEN as u64 {
-                        full_hash_map.entry(prefix_hash).or_default().push(file);
-                    } else if let Ok(Some(full_hash)) =
-                        Self::hash_full_file(&file.path, file.size, cancel_flag)
-                    {
-                        full_hash_map.entry(full_hash).or_default().push(file);
-                    }
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+
+                let mut full_hash_map: HashMap<[u8; 32], Vec<&FileEntry>> = HashMap::new();
+                for item in full_results.into_iter().flatten() {
+                    full_hash_map.entry(item.0).or_default().push(item.1);
                 }
 
                 for (verified_hash, verified_files) in full_hash_map {
