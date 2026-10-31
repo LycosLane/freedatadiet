@@ -21,11 +21,12 @@
 Pre-compiled, self-contained release packages are published on the **[Releases](https://github.com/LycosLane/FreeDataDiet/releases)** page.
 
 ### Windows
-* **Winget (Recommended):**
+* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe` - Recommended):** Single portable file. No installer required: double-click and run.
+* **Winget (Coming soon):**
   ```cmd
   winget install freedatadiet
   ```
-* **Standalone Executable (`freedatadiet-<version>-windows-x64.exe`):** Single portable file. No installer required: double-click and run.
+  *(Package submission in progress. Please use the standalone executable above in the meantime.)*
 
 ### Linux
 * **Official APT Repository (Debian / Ubuntu / Mint / Pop!_OS - Recommended):**  
