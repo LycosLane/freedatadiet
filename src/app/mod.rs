@@ -2,6 +2,7 @@ pub mod duplicates_view;
 pub mod modals;
 pub mod shortcuts_dialog;
 pub mod sidebar;
+pub mod sidebar_settings;
 pub mod sorting;
 pub mod status_bar;
 pub mod table;

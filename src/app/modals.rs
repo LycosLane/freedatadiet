@@ -501,6 +501,7 @@ impl FreeDataDietApp {
                     ui.add_space(10.0);
 
                     ui.horizontal(|ui| {
+                        let inactive_bg = ui.visuals().widgets.inactive.bg_fill;
                         // 1. Move to Trash (default selection when allowed)
                         let is_trash = self.modal_focus == DeleteModalFocus::Trash;
                         let trash_text = if is_trash {
@@ -509,7 +510,7 @@ impl FreeDataDietApp {
                             RichText::new("Move to Trash")
                         };
                         let trash_btn = egui::Button::new(trash_text)
-                            .fill(if is_trash { Color32::from_rgb(30, 110, 200) } else { Color32::from_rgb(50, 50, 50) });
+                            .fill(if is_trash { Color32::from_rgb(30, 110, 200) } else { inactive_bg });
 
                         // 2. Delete Permanently
                         let is_perm = self.modal_focus == DeleteModalFocus::Permanent;
@@ -519,7 +520,7 @@ impl FreeDataDietApp {
                             RichText::new("Delete Permanently").color(Color32::from_rgb(255, 120, 120))
                         };
                         let perm_btn = egui::Button::new(perm_text)
-                            .fill(if is_perm { Color32::from_rgb(180, 40, 40) } else { Color32::from_rgb(50, 50, 50) });
+                            .fill(if is_perm { Color32::from_rgb(180, 40, 40) } else { inactive_bg });
 
                         // 3. Cancel
                         let is_cancel = self.modal_focus == DeleteModalFocus::Cancel;
@@ -529,7 +530,7 @@ impl FreeDataDietApp {
                             RichText::new("Cancel")
                         };
                         let cancel_btn = egui::Button::new(cancel_text)
-                            .fill(if is_cancel { Color32::from_rgb(90, 90, 90) } else { Color32::from_rgb(50, 50, 50) });
+                            .fill(if is_cancel { Color32::from_rgb(90, 90, 90) } else { inactive_bg });
 
                         let do_trash = ui.add_enabled(!del_blocked, trash_btn).clicked() || (is_trash && modal_enter && !del_blocked);
                         let do_perm = ui.add_enabled(!del_blocked, perm_btn).clicked() || (is_perm && modal_enter && !del_blocked);
@@ -657,14 +658,20 @@ impl FreeDataDietApp {
                     );
                     ui.add_space(6.0);
 
-                    for p in empty_folders {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(p.to_string_lossy()).small());
-                            if ui.small_button("Open").on_hover_text("Open folder in file explorer").clicked() {
-                                open_empty = Some(p.clone());
+                    ScrollArea::vertical()
+                        .max_height(180.0)
+                        .show(ui, |ui| {
+                            for p in empty_folders {
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Label::new(RichText::new(p.to_string_lossy()).small()).truncate());
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.small_button("Open").on_hover_text("Open folder in file explorer").clicked() {
+                                            open_empty = Some(p.clone());
+                                        }
+                                    });
+                                });
                             }
                         });
-                    }
 
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {

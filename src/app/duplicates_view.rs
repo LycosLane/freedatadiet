@@ -18,11 +18,11 @@ impl FreeDataDietApp {
     pub(super) fn render_duplicates_view(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let total_clusters = self.duplicate_clusters.len();
 
-        // --- TOP DUPLICATES ACTION BAR ---
+        // --- TOP DUPLICATES METRICS & ACTION BAR ---
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!(
-                    "Duplicate Groups: {}  |  Wasted Space: {}  |  Selected to Delete: {} ({})",
+                    "Duplicate Groups: {}  |  Wasted Space: {}  |  Selected: {} ({})",
                     total_clusters,
                     format_size(self.duplicate_total_wasted),
                     self.duplicate_eligible_count,
@@ -34,7 +34,7 @@ impl FreeDataDietApp {
             if self.duplicate_blocked_count > 0 {
                 ui.label(
                     RichText::new(format!(
-                        "({} group(s) skipped: check file name box to delete all copies)",
+                        "({} skipped: check group box to delete all copies)",
                         self.duplicate_blocked_count
                     ))
                     .small()
@@ -49,7 +49,52 @@ impl FreeDataDietApp {
                     self.trigger_scan();
                     return;
                 }
+            });
+        });
 
+        ui.add_space(2.0);
+
+        // Action controls toolbar row
+        ui.horizontal(|ui| {
+            if ui
+                .button("Keep First Copy in All")
+                .on_hover_text("Marks all redundant copies for deletion while keeping the first occurrence in each group")
+                .clicked()
+            {
+                for cluster in &mut self.duplicate_clusters {
+                    cluster.is_group_selected = false;
+                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
+                        occ.is_selected = i > 0 && !occ.is_system_protected;
+                    }
+                }
+                self.safety_warning = None;
+                self.update_duplicate_assistant();
+                self.recompute_duplicate_stats();
+            }
+
+            if self.config.enable_duplicate_suggestions {
+                let auto_rules_btn = egui::Button::new(
+                    RichText::new("Apply Category Rules").color(Color32::from_rgb(255, 175, 50)),
+                );
+                if ui
+                    .add(auto_rules_btn)
+                    .on_hover_text("Auto-mark copies based on category duplicate rules (Keep Oldest/Newest)")
+                    .clicked()
+                {
+                    self.apply_category_duplicate_rules();
+                }
+            }
+
+            if ui.button("Clear Selection").clicked() {
+                for cluster in &mut self.duplicate_clusters {
+                    cluster.set_group_selected(false);
+                }
+                self.safety_warning = None;
+                self.update_duplicate_assistant();
+                self.recompute_duplicate_stats();
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_eligible = self.duplicate_eligible_count > 0;
                 let perm_btn = egui::Button::new(
                     RichText::new("Delete Permanently").color(if has_eligible {
@@ -100,73 +145,54 @@ impl FreeDataDietApp {
                     };
                     self.modal_focus = DeleteModalFocus::Trash;
                 }
-
-                if ui.button("Clear Selection").clicked() {
-                    for cluster in &mut self.duplicate_clusters {
-                        cluster.set_group_selected(false);
-                    }
-                    self.safety_warning = None;
-                    self.update_duplicate_assistant();
-                    self.recompute_duplicate_stats();
-                }
-
-                if self.config.enable_duplicate_suggestions {
-                    let auto_rules_btn = egui::Button::new(
-                        RichText::new("Apply Category Rules").color(Color32::from_rgb(255, 175, 50)),
-                    );
-                    if ui
-                        .add(auto_rules_btn)
-                        .on_hover_text("Auto-mark copies based on category duplicate rules (Keep Oldest/Newest)")
-                        .clicked()
-                    {
-                        self.apply_category_duplicate_rules();
-                    }
-                }
-
-                if ui
-                    .button("Keep First Copy in All")
-                    .on_hover_text("Marks all redundant copies for deletion while keeping the first occurrence in each group")
-                    .clicked()
-                {
-                    for cluster in &mut self.duplicate_clusters {
-                        cluster.is_group_selected = false;
-                        for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                            occ.is_selected = i > 0 && !occ.is_system_protected;
-                        }
-                    }
-                    self.safety_warning = None;
-                    self.update_duplicate_assistant();
-                    self.recompute_duplicate_stats();
-                }
             });
         });
 
-        ui.add_space(2.0);
+        ui.add_space(4.0);
 
         // --- DUPLICATE ASSISTANT BANNER ---
         let mut apply_sugg = false;
         let mut dismiss_sugg = false;
         if let Some(sugg) = &self.active_suggestion {
             egui::Frame::new()
-                .fill(if is_dark { Color32::from_rgb(28, 48, 68) } else { Color32::from_rgb(220, 238, 255) })
-                .corner_radius(3.0)
-                .inner_margin(egui::Margin::symmetric(8, 4))
+                .fill(if is_dark {
+                    Color32::from_rgb(28, 48, 68)
+                } else {
+                    Color32::from_rgb(220, 238, 255)
+                })
+                .stroke(Stroke::new(1.0, Color32::from_rgb(50, 130, 210)))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             RichText::new(&sugg.message)
                                 .strong()
-                                .small(),
+                                .color(if is_dark {
+                                    Color32::from_rgb(170, 215, 255)
+                                } else {
+                                    Color32::from_rgb(10, 70, 130)
+                                }),
                         );
-                        if ui.small_button(format!("Select Copies in \"{}\"", sugg.folder_name)).clicked() {
+                        ui.add_space(8.0);
+                        let folder_display = if sugg.folder_name.len() > 30 {
+                            format!("{}...", &sugg.folder_name[..27])
+                        } else {
+                            sugg.folder_name.clone()
+                        };
+                        if ui
+                            .button(RichText::new(format!("Select Copies in \"{}\"", folder_display)).strong())
+                            .clicked()
+                        {
                             apply_sugg = true;
                         }
-                        if ui.small_button("Dismiss").clicked() {
+                        if ui.button("Dismiss").clicked() {
                             dismiss_sugg = true;
                         }
                     });
                 });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
         }
         if apply_sugg {
             if let Some(sugg) = &self.active_suggestion {
@@ -191,25 +217,37 @@ impl FreeDataDietApp {
         let mut clear_warn = false;
         if let Some((warn_msg, first_path)) = &self.safety_warning {
             egui::Frame::new()
-                .fill(if is_dark { Color32::from_rgb(65, 38, 20) } else { Color32::from_rgb(255, 235, 210) })
+                .fill(if is_dark {
+                    Color32::from_rgb(65, 38, 20)
+                } else {
+                    Color32::from_rgb(255, 235, 210)
+                })
                 .stroke(Stroke::new(1.0, Color32::from_rgb(230, 140, 40)))
-                .corner_radius(3.0)
-                .inner_margin(egui::Margin::symmetric(8, 4))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.set_max_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new("[!]").color(Color32::from_rgb(255, 175, 50)).strong());
-                        ui.label(RichText::new(warn_msg).small());
+                        ui.label(
+                            RichText::new(warn_msg).color(if is_dark {
+                                Color32::from_rgb(255, 220, 175)
+                            } else {
+                                Color32::from_rgb(120, 60, 10)
+                            }),
+                        );
+                        ui.add_space(8.0);
                         if let Some(fp) = first_path {
-                            if ui.small_button("Jump to First Occurrence").clicked() {
+                            if ui.button("Jump to First Occurrence").clicked() {
                                 jump_to_first = Some(fp.clone());
                             }
                         }
-                        if ui.small_button("Dismiss").clicked() {
+                        if ui.button("Dismiss").clicked() {
                             clear_warn = true;
                         }
                     });
                 });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
         }
         if let Some(target) = jump_to_first {
             self.selected_path = Some(target);

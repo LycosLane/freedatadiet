@@ -8,7 +8,7 @@
 > A fast, lightweight disk usage analyzer built with Rust & egui.  
 > *Find what is eating your storage with no installer required and no subscriptions.*
 
-[![Version: 1.5.0](https://img.shields.io/badge/version-1.5.0-blue.svg)]()
+[![Version: 1.6.0](https://img.shields.io/badge/version-1.6.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
@@ -53,7 +53,7 @@ Pre-compiled, self-contained release packages are published on the **[Releases](
 ---
 
 ### In-App Update Checker
-FreeDataDiet includes a built-in update indicator. When a new version is released, a green **`⟳ Update`** icon appears in the top navigation bar. Clicking it allows 1-click download & restart for portable executables, or provides the quick update command for your package manager.
+FreeDataDiet includes a built-in update indicator. When a new version is released, a green **`[Update]`** icon appears in the top navigation bar. Clicking it allows 1-click download & restart for portable executables, or provides the quick update command for your package manager.
 
 ---
 

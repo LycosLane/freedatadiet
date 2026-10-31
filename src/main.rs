@@ -3,6 +3,7 @@
 pub mod app;
 pub mod config;
 pub mod duplicate;
+pub mod duplicate_suggestion;
 pub mod locations;
 pub mod model;
 pub mod platform;
