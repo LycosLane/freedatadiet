@@ -8,7 +8,85 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::model::FileEntry;
-use crate::platform::{get_allocated_size, get_file_id_and_links, FileId};
+use crate::platform::{get_allocated_size_from_meta, get_file_id_and_links, FileId};
+
+#[derive(Clone, Debug, Default)]
+pub struct CompiledExcludes {
+    exact_names: HashSet<String>,
+    prefix_names: Vec<String>,
+    suffix_names: Vec<String>,
+    contains_names: Vec<String>,
+    path_prefixes: Vec<String>,
+}
+
+impl CompiledExcludes {
+    pub fn compile(raw_patterns: &[String]) -> Self {
+        let mut exact_names = HashSet::new();
+        let mut prefix_names = Vec::new();
+        let mut suffix_names = Vec::new();
+        let mut contains_names = Vec::new();
+        let mut path_prefixes = Vec::new();
+
+        for raw in raw_patterns {
+            let pat = raw.trim().to_lowercase();
+            if pat.is_empty() {
+                continue;
+            }
+
+            if pat.contains('/') || pat.contains('\\') {
+                let norm = pat.replace('\\', "/").trim_end_matches('/').to_string();
+                path_prefixes.push(norm);
+            } else if pat.starts_with('*') && pat.ends_with('*') && pat.len() > 2 {
+                contains_names.push(pat[1..pat.len() - 1].to_string());
+            } else if let Some(suffix) = pat.strip_prefix('*') {
+                suffix_names.push(suffix.to_string());
+            } else if let Some(prefix) = pat.strip_suffix('*') {
+                prefix_names.push(prefix.to_string());
+            } else {
+                exact_names.insert(pat);
+            }
+        }
+
+        Self {
+            exact_names,
+            prefix_names,
+            suffix_names,
+            contains_names,
+            path_prefixes,
+        }
+    }
+
+    #[inline]
+    pub fn matches(&self, name: &str, path: &Path) -> bool {
+        if crate::model::is_dos_device_name(name) {
+            return true;
+        }
+
+        if self.exact_names.iter().any(|ex| ex.eq_ignore_ascii_case(name)) {
+            return true;
+        }
+
+        let lower_name = name.to_ascii_lowercase();
+        if self.prefix_names.iter().any(|p| lower_name.starts_with(p))
+            || self.suffix_names.iter().any(|s| lower_name.ends_with(s))
+            || self.contains_names.iter().any(|c| lower_name.contains(c))
+        {
+            return true;
+        }
+
+        if !self.path_prefixes.is_empty() {
+            let path_str = path.to_string_lossy();
+            let norm_path = path_str.replace('\\', "/").to_ascii_lowercase();
+            for prefix in &self.path_prefixes {
+                if norm_path == *prefix || norm_path.starts_with(&format!("{}/", prefix)) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ScanSummary {
@@ -42,8 +120,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_clone = Arc::clone(&cancel_flag);
 
-    let excludes: Vec<String> = excludes.into_iter().map(|s| s.to_lowercase()).collect();
-    let excludes = Arc::new(excludes);
+    let compiled_excludes = Arc::new(CompiledExcludes::compile(&excludes));
 
     thread::spawn(move || {
         let start_time = Instant::now();
@@ -53,7 +130,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
         if flatten || root_paths.len() > 1 {
             scan_flattened(
                 root_paths,
-                excludes,
+                compiled_excludes,
                 cancel_clone,
                 total_counter,
                 seen_hardlinks,
@@ -104,7 +181,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
 
                 let (size, allocated, is_scanning) = if !is_dir {
                     let s = meta_opt.as_ref().map(|m| m.len()).unwrap_or(0);
-                    let a = get_allocated_size(&path, s);
+                    let a = get_allocated_size_from_meta(&path, meta_opt.as_ref(), s);
                     let is_dup = if let Some(m) = &meta_opt {
                         let (fid_opt, links) = get_file_id_and_links(&path, m);
                         if links > 1 {
@@ -167,7 +244,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
             let child_paths = Arc::clone(&child_paths);
             let cancel = Arc::clone(&cancel_clone);
             let total_counter = Arc::clone(&total_counter);
-            let excludes = Arc::clone(&excludes);
+            let excludes = Arc::clone(&compiled_excludes);
             let seen_hardlinks = Arc::clone(&seen_hardlinks);
             let worker_tx = worker_tx.clone();
 
@@ -234,47 +311,6 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
     }
 }
 
-fn matches_exclude(name: &str, path: &Path, excludes: &[String]) -> bool {
-    let lower_name = name.to_lowercase();
-    let path_str = path.to_string_lossy().to_lowercase();
-    let norm_path = path_str.replace('\\', "/");
-
-    for ex in excludes {
-        let pattern = ex.trim().to_lowercase();
-        if pattern.is_empty() {
-            continue;
-        }
-
-        // Path-based exclusion check
-        if pattern.contains('/') || pattern.contains('\\') {
-            let norm_pattern = pattern.replace('\\', "/");
-            let norm_pattern = norm_pattern.trim_end_matches('/');
-            if norm_path == norm_pattern || norm_path.starts_with(&format!("{}/", norm_pattern)) {
-                return true;
-            }
-        }
-
-        // Wildcard support: *pattern*, *suffix, prefix*, or exact match
-        if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 2 {
-            let substr = &pattern[1..pattern.len() - 1];
-            if lower_name.contains(substr) {
-                return true;
-            }
-        } else if let Some(suffix) = pattern.strip_prefix('*') {
-            if lower_name.ends_with(suffix) {
-                return true;
-            }
-        } else if let Some(prefix) = pattern.strip_suffix('*') {
-            if lower_name.starts_with(prefix) {
-                return true;
-            }
-        } else if lower_name == pattern {
-            return true;
-        }
-    }
-    false
-}
-
 /// `symlink_metadata().is_dir()` is false for links, so follow the link only to learn whether it points at a folder.
 fn is_dir_entry(path: &Path, meta: &fs::Metadata) -> bool {
     meta.is_dir() || (meta.file_type().is_symlink() && fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false))
@@ -285,7 +321,7 @@ fn process_single_entry(
     name: &str,
     cancel: &Arc<AtomicBool>,
     total_counter: &Arc<AtomicUsize>,
-    excludes: &[String],
+    excludes: &CompiledExcludes,
     seen_hardlinks: &Arc<Mutex<HashSet<FileId>>>,
 ) -> FileEntry {
     total_counter.fetch_add(1, Ordering::Relaxed);
@@ -323,7 +359,7 @@ fn process_single_entry(
             false
         };
         let counted_size = if is_dup { 0 } else { size };
-        let allocated = if is_dup { 0 } else { get_allocated_size(path, size) };
+        let allocated = if is_dup { 0 } else { get_allocated_size_from_meta(path, Some(&metadata), size) };
         FileEntry::new(
             name.to_string(),
             path.to_path_buf(),
@@ -352,9 +388,9 @@ fn process_single_entry(
         }
 
         // If this directory itself is excluded, skip walking children
-        if matches_exclude(name, path, excludes) {
+        if excludes.matches(name, path) {
             let size = metadata.len();
-            let allocated = get_allocated_size(path, size);
+            let allocated = get_allocated_size_from_meta(path, Some(&metadata), size);
             return FileEntry::new(
                 format!("{} (ignored)", name),
                 path.to_path_buf(),
@@ -399,7 +435,7 @@ fn process_single_entry(
                             let sub_name = e.file_name().to_string_lossy().to_string();
 
                             // Check excludes on subfolders
-                            if matches_exclude(&sub_name, &sub_path, excludes) {
+                            if excludes.matches(&sub_name, &sub_path) {
                                 continue;
                             }
 
@@ -433,7 +469,7 @@ fn process_single_entry(
 
                                     if !is_dup {
                                         dir_size += fsize;
-                                        dir_allocated += get_allocated_size(&sub_path, fsize);
+                                        dir_allocated += get_allocated_size_from_meta(&sub_path, Some(&meta), fsize);
                                     }
                                 }
                             }
@@ -478,7 +514,7 @@ struct DirFrame {
 
 fn scan_flattened(
     roots: Vec<PathBuf>,
-    excludes: Arc<Vec<String>>,
+    excludes: Arc<CompiledExcludes>,
     cancel: Arc<AtomicBool>,
     total_counter: Arc<AtomicUsize>,
     seen_hardlinks: Arc<Mutex<HashSet<FileId>>>,
@@ -488,7 +524,7 @@ fn scan_flattened(
     let mut total_size = 0u64;
     let mut total_allocated = 0u64;
     let mut total_files = 0usize;
-    let mut batch = Vec::with_capacity(128);
+    let mut batch = Vec::with_capacity(2048);
     let mut last_progress = Instant::now();
 
     for root_path in roots {
@@ -503,7 +539,7 @@ fn scan_flattened(
 
         if !is_dir_entry(&root_path, &root_meta) {
             let size = root_meta.len();
-            let alloc = get_allocated_size(&root_path, size);
+            let alloc = get_allocated_size_from_meta(&root_path, Some(&root_meta), size);
             total_size += size;
             total_allocated += alloc;
             total_files += 1;
@@ -545,7 +581,7 @@ fn scan_flattened(
                 if let Ok(entry) = entry_res {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let path = entry.path();
-                    if matches_exclude(&name, &path, &excludes) {
+                    if excludes.matches(&name, &path) {
                         continue;
                     }
                     let meta_opt = fs::symlink_metadata(&path).ok();
@@ -559,7 +595,7 @@ fn scan_flattened(
                             }
                         } else {
                             let size = meta.len();
-                            let alloc = get_allocated_size(&path, size);
+                            let alloc = get_allocated_size_from_meta(&path, Some(&meta), size);
                             let (fid_opt, links) = get_file_id_and_links(&path, &meta);
                             let is_dup = if links > 1 {
                                 if let Some(fid) = fid_opt {
@@ -639,7 +675,7 @@ fn scan_flattened(
                         total_counter.fetch_add(1, Ordering::Relaxed);
                         batch.push(f);
                     }
-                    if batch.len() >= 128 {
+                    if batch.len() >= 2048 {
                         if tx
                             .send(ScanMessage::InitialEntries(std::mem::take(&mut batch)))
                             .is_err()
@@ -673,7 +709,7 @@ fn scan_flattened(
                     );
                     batch.push(folder_entry);
 
-                    if batch.len() >= 128 {
+                    if batch.len() >= 2048 {
                         if tx
                             .send(ScanMessage::InitialEntries(std::mem::take(&mut batch)))
                             .is_err()
@@ -723,20 +759,21 @@ mod tests {
 
     #[test]
     fn test_matches_exclude_path_and_wildcards() {
-        let excludes = vec![
+        let raw_excludes = vec![
             "*cache*".to_string(),
             "target".to_string(),
             "C:/Users/lukas/Backups".to_string(),
         ];
+        let excludes = CompiledExcludes::compile(&raw_excludes);
 
         // Name wildcard
-        assert!(matches_exclude("thumb_cache_dir", Path::new("C:/Data/thumb_cache_dir"), &excludes));
-        assert!(matches_exclude("target", Path::new("C:/Project/target"), &excludes));
-        assert!(!matches_exclude("src", Path::new("C:/Project/src"), &excludes));
+        assert!(excludes.matches("thumb_cache_dir", Path::new("C:/Data/thumb_cache_dir")));
+        assert!(excludes.matches("target", Path::new("C:/Project/target")));
+        assert!(!excludes.matches("src", Path::new("C:/Project/src")));
 
         // Path exclusion prefix
-        assert!(matches_exclude("photos", Path::new("C:/Users/lukas/Backups/photos"), &excludes));
-        assert!(matches_exclude("Backups", Path::new("C:\\Users\\lukas\\Backups"), &excludes));
-        assert!(!matches_exclude("photos", Path::new("C:/Users/lukas/Documents/photos"), &excludes));
+        assert!(excludes.matches("photos", Path::new("C:/Users/lukas/Backups/photos")));
+        assert!(excludes.matches("Backups", Path::new("C:\\Users\\lukas\\Backups")));
+        assert!(!excludes.matches("photos", Path::new("C:/Users/lukas/Documents/photos")));
     }
 }

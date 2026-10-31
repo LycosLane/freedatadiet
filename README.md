@@ -8,7 +8,7 @@
 > A fast, lightweight disk usage analyzer built with Rust & egui.  
 > *Find what is eating your storage with no installer required and no subscriptions.*
 
-[![Version: 1.4.0](https://img.shields.io/badge/version-1.4.0-blue.svg)]()
+[![Version: 1.5.0](https://img.shields.io/badge/version-1.5.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()
@@ -119,9 +119,14 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 ## Features & Highlights
 
-* **Two-Pass Duplicate Finder:** Identifies byte-exact duplicate files using 4 KB prefix hashing and streaming 64 KB SHA-256 blocks with zero memory bloat.
+* **Multi-Stage Duplicate Finder:** Identifies bit-exact duplicate files using 64 KB prefix and suffix hashing followed by 1 MB streaming SHA-256 blocks with zero memory bloat.
 * **Selection Safety Gate:** Selecting all duplicate copies in a cluster requires explicit confirmation via the primary file header checkbox before complete deletion is permitted.
 * **Duplicate Assistant:** Identifies sibling duplicates in the same directory whose counterparts are preserved elsewhere, offering one-click batch cleanup.
+* **Category Duplicate Rules:** Configurable automatic selection recommendations per file type (Keep Oldest, Keep Newest, Keep First, or Off).
+* **In-Memory Deletion:** Immediate list updates upon deletion without triggering slow, repetitive disk rescans.
+* **Empty Folder Cleanup:** Prompts to clean up or inspect folders left empty after deleting redundant duplicates.
+* **Ignored Locations Management:** Permanently ignore folders for duplicate searches or hide them completely from scanning.
+* **Generic Wildcard Exclusion Matching:** Exclude folders and files by name, prefix, suffix, substring, or absolute directory prefix with pre-compiled rules.
 * **Favorites & Startup Priority:** Pin custom directories with startup prioritization and non-blocking offline network/USB detection.
 * **Category Filters:** Quick toggle pills for Images, Videos, Audio, Documents, and Archives.
 * **Recursive Subfolder Flattening:** Flatten deep folder hierarchies to inspect leaf files across an entire drive subtree.

@@ -89,7 +89,6 @@ pub struct FileEntry {
     pub is_reparse_point: bool,
     pub is_scanning: bool,
     pub category: FileCategory,
-    pub duplicate_group_id: Option<String>,
 }
 
 impl FileEntry {
@@ -121,7 +120,6 @@ impl FileEntry {
             is_reparse_point,
             is_scanning: false,
             category,
-            duplicate_group_id: None,
         }
     }
 }
@@ -151,44 +149,64 @@ pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
     (is_sys_path, name.starts_with('.'), false)
 }
 
+#[cfg(windows)]
+static SYSTEM_PREFIXES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    let vars = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"];
+    let mut roots = Vec::new();
+    for var in vars {
+        if let Ok(val) = std::env::var(var) {
+            roots.push(val.replace('/', "\\").to_lowercase());
+        }
+    }
+    if roots.is_empty() {
+        roots.push("c:\\windows".to_string());
+        roots.push("c:\\program files".to_string());
+        roots.push("c:\\program files (x86)".to_string());
+        roots.push("c:\\programdata".to_string());
+    }
+    roots
+});
+
+pub fn is_dos_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    let s = stem.to_ascii_uppercase();
+    matches!(
+        s.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    )
+}
+
 pub fn is_system_path(path: &Path) -> bool {
     let raw = path.to_string_lossy().replace('/', "\\").to_lowercase();
-    let s = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
+    let s = if let Some(stripped) = raw.strip_prefix("\\\\?\\unc\\") {
+        format!("\\\\{}", stripped)
+    } else if let Some(stripped) = raw.strip_prefix("\\\\?\\") {
+        stripped.to_string()
+    } else {
+        raw
+    };
 
     #[cfg(windows)]
     {
-        let system_root = std::env::var("SystemRoot")
-            .unwrap_or_else(|_| "c:\\windows".to_string())
-            .replace('/', "\\")
-            .to_lowercase();
-        let program_files = std::env::var("ProgramFiles")
-            .unwrap_or_else(|_| "c:\\program files".to_string())
-            .replace('/', "\\")
-            .to_lowercase();
-        let program_files_x86 = std::env::var("ProgramFiles(x86)")
-            .unwrap_or_else(|_| "c:\\program files (x86)".to_string())
-            .replace('/', "\\")
-            .to_lowercase();
-        let program_data = std::env::var("ProgramData")
-            .unwrap_or_else(|_| "c:\\programdata".to_string())
-            .replace('/', "\\")
-            .to_lowercase();
-
-        if s == system_root
-            || s.starts_with(&format!("{}\\", system_root))
-            || s == program_files
-            || s.starts_with(&format!("{}\\", program_files))
-            || s == program_files_x86
-            || s.starts_with(&format!("{}\\", program_files_x86))
-            || s == program_data
-            || s.starts_with(&format!("{}\\", program_data))
-        {
-            return true;
+        for root in SYSTEM_PREFIXES.iter() {
+            if s == *root || s.starts_with(&format!("{root}\\")) {
+                return true;
+            }
         }
 
-        // Multi-drive protection for secondary installations or drive-level critical folders
+        // Multi-drive protection for secondary installations, 8.3 aliases, or drive-level critical folders
         if s.contains("\\system volume information")
             || s.contains("\\$recycle.bin")
+            || s.contains("\\boot")
+            || s.contains("\\efi")
+            || s.contains("\\recovery")
+            || s.contains("\\$winreagent")
+            || s.contains("\\progra~1")
+            || s.contains("\\progra~2")
+            || s.contains("\\window~1")
+            || s.contains("\\progra~3")
             || s.ends_with("\\windows")
             || s.contains("\\windows\\")
             || s.ends_with("\\program files")
@@ -224,7 +242,17 @@ pub fn is_drive_root(path: &Path) -> bool {
     }
     let raw = path.to_string_lossy().replace('/', "\\");
     let s = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
-    s == "\\" || (s.len() <= 3 && s.contains(':'))
+    if s == "\\" || (s.len() <= 3 && s.contains(':')) {
+        return true;
+    }
+    // UNC share root check: \\server\share
+    if s.starts_with("\\\\") {
+        let parts: Vec<&str> = s.trim_start_matches('\\').split('\\').filter(|p| !p.is_empty()).collect();
+        if parts.len() <= 2 {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_root_or_system(path: &Path) -> bool {

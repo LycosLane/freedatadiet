@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,8 +13,9 @@ use crate::config::DuplicateCriteriaConfig;
 use crate::model::FileEntry;
 use crate::platform::{get_file_id_and_links, FileId};
 
-pub const PREFIX_HASH_LEN: usize = 4096;
-pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
+pub const PREFIX_HASH_LEN: usize = 64 * 1024;
+pub const SUFFIX_HASH_LEN: usize = 64 * 1024;
+pub const STREAM_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DuplicateOccurrence {
@@ -44,14 +45,14 @@ impl DuplicateCluster {
         if self.occurrences.len() <= 1 {
             0
         } else {
-            (self.occurrences.len() - 1) as u64 * self.file_size
+            ((self.occurrences.len() - 1) as u64).saturating_mul(self.file_size)
         }
     }
 
     /// Total bytes that will be reclaimed based on current selection.
     pub fn reclaimable_bytes(&self) -> u64 {
         let selected_count = self.occurrences.iter().filter(|o| o.is_selected).count();
-        selected_count as u64 * self.file_size
+        (selected_count as u64).saturating_mul(self.file_size)
     }
 
     /// Checks if all copies are selected.
@@ -71,6 +72,18 @@ impl DuplicateCluster {
         Ok(())
     }
 
+    /// Number of copies eligible for deletion without allocating a vector.
+    pub fn deletable_count(&self) -> usize {
+        if self.are_all_copies_selected() && !self.is_group_selected {
+            0
+        } else {
+            self.occurrences
+                .iter()
+                .filter(|o| o.is_selected && !o.is_system_protected)
+                .count()
+        }
+    }
+
     /// Returns the paths in this cluster that are eligible for deletion.
     /// When all copies are selected but the file header checkbox (`is_group_selected`) is NOT checked,
     /// none of the copies in this cluster will be deleted.
@@ -87,7 +100,7 @@ impl DuplicateCluster {
 
     /// Total bytes eligible for deletion in this cluster (0 if all copies are selected without header confirmation).
     pub fn deletable_bytes(&self) -> u64 {
-        self.deletable_paths().len() as u64 * self.file_size
+        (self.deletable_count() as u64).saturating_mul(self.file_size)
     }
 
     /// Toggles the group-level checkbox.
@@ -141,11 +154,31 @@ pub struct DuplicateSuggestion {
     pub message: String,
 }
 
+fn subpartition_by<T, K, F>(groups: Vec<Vec<T>>, key_fn: F) -> Vec<Vec<T>>
+where
+    K: std::hash::Hash + Eq,
+    F: Fn(&T) -> K,
+{
+    let mut result = Vec::new();
+    for group in groups {
+        let mut map: HashMap<K, Vec<T>> = HashMap::new();
+        for item in group {
+            map.entry(key_fn(&item)).or_default().push(item);
+        }
+        for (_, sub) in map {
+            if sub.len() >= 2 {
+                result.push(sub);
+            }
+        }
+    }
+    result
+}
+
 pub struct DuplicateEngine;
 
 impl DuplicateEngine {
     /// Detects duplicate files from a list of scanned entries according to criteria.
-    /// Uses two-pass verification (4KB Prefix Hash -> 64KB Chunked Full SHA-256)
+    /// Uses 3-stage verification (64KB Prefix Hash -> 64KB Suffix Hash -> 1MB Streamed Full SHA-256)
     /// with optional progress reporting.
     pub fn find_duplicates(
         entries: &[FileEntry],
@@ -196,22 +229,10 @@ impl DuplicateEngine {
 
         // Stage 2: Sub-partition by case-insensitive name if match_name is enabled
         let name_groups: Vec<Vec<&FileEntry>> = if criteria.match_name {
-            let mut result = Vec::new();
-            for group in size_groups {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-                let mut name_map: HashMap<String, Vec<&FileEntry>> = HashMap::new();
-                for file in group {
-                    name_map.entry(file.name.to_lowercase()).or_default().push(file);
-                }
-                for (_, sub) in name_map {
-                    if sub.len() >= 2 {
-                        result.push(sub);
-                    }
-                }
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Vec::new();
             }
-            result
+            subpartition_by(size_groups, |file| file.name.to_lowercase())
         } else {
             size_groups
         };
@@ -225,22 +246,10 @@ impl DuplicateEngine {
 
         // Stage 3: Sub-partition by modification timestamp if match_timestamp is enabled
         let metadata_groups: Vec<Vec<&FileEntry>> = if criteria.match_timestamp {
-            let mut result = Vec::new();
-            for group in name_groups {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-                let mut time_map: HashMap<Option<SystemTime>, Vec<&FileEntry>> = HashMap::new();
-                for file in group {
-                    time_map.entry(file.modified).or_default().push(file);
-                }
-                for (_, sub) in time_map {
-                    if sub.len() >= 2 {
-                        result.push(sub);
-                    }
-                }
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Vec::new();
             }
-            result
+            subpartition_by(name_groups, |file| file.modified)
         } else {
             name_groups
         };
@@ -277,8 +286,7 @@ impl DuplicateEngine {
             return clusters;
         }
 
-        // --- VERIFY HASH (PARALLEL TWO-PASS WITH RAYON & PROGRESS) ---
-        // Flatten candidate files with group index
+        // --- VERIFY HASH (PARALLEL MULTI-STAGE WITH RAYON & PROGRESS) ---
         let mut indexed_candidates: Vec<(usize, &FileEntry)> = Vec::new();
         for (g_idx, group) in metadata_groups.iter().enumerate() {
             for file in group {
@@ -289,13 +297,13 @@ impl DuplicateEngine {
         let total_prefix_files = indexed_candidates.len();
         if let Some(tx) = progress_tx {
             let _ = tx.send(DuplicateMessage::Progress {
-                stage: "Hashing candidate headers (4 KB)...".into(),
+                stage: "Hashing candidate headers (64 KB)...".into(),
                 done: 0,
                 total: total_prefix_files,
             });
         }
 
-        // Pass 1: 4 KB Prefix Hash
+        // Pass 1: 64 KB Prefix Hash
         let prefix_counter = std::sync::atomic::AtomicUsize::new(0);
         let prefix_results: Vec<Option<(usize, [u8; 32], &FileEntry)>> = indexed_candidates
             .par_iter()
@@ -311,7 +319,7 @@ impl DuplicateEngine {
                 if done % 200 == 0 || done == total_prefix_files {
                     if let Some(tx) = progress_tx {
                         let _ = tx.send(DuplicateMessage::Progress {
-                            stage: "Hashing candidate headers (4 KB)...".into(),
+                            stage: "Hashing candidate headers (64 KB)...".into(),
                             done,
                             total: total_prefix_files,
                         });
@@ -331,7 +339,6 @@ impl DuplicateEngine {
             prefix_groups.entry((item.0, item.1)).or_default().push(item.2);
         }
 
-        // Filter groups with >= 2 candidates
         let mut survivor_groups: Vec<((usize, [u8; 32]), Vec<&FileEntry>)> = Vec::new();
         for (key, candidates) in prefix_groups {
             if candidates.len() >= 2 {
@@ -339,10 +346,8 @@ impl DuplicateEngine {
             }
         }
 
-        // Collect files requiring full hash (size > 4KB)
-        let mut full_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
-        let mut small_clusters: Vec<DuplicateCluster> = Vec::new();
-
+        // Separate small files (<= 64KB, completely verified by prefix hash)
+        let mut suffix_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
         for ((g_idx, prefix_hash), candidates) in survivor_groups {
             if candidates[0].size <= PREFIX_HASH_LEN as u64 {
                 let cluster = Self::build_cluster_from_group(
@@ -350,18 +355,83 @@ impl DuplicateEngine {
                     &candidates,
                     Some(prefix_hash),
                 );
-                small_clusters.push(cluster);
+                clusters.push(cluster);
                 cluster_idx += 1;
             } else {
                 for file in candidates {
-                    full_hash_items.push((g_idx, prefix_hash, file));
+                    suffix_hash_items.push((g_idx, prefix_hash, file));
                 }
             }
         }
 
-        clusters.extend(small_clusters);
+        // Pass 2: 64 KB Suffix Hash for files > 64KB
+        let total_suffix_files = suffix_hash_items.len();
+        let mut full_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
 
-        // Pass 2: Full Streaming SHA-256 for large files
+        if total_suffix_files > 0 {
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(DuplicateMessage::Progress {
+                    stage: "Hashing candidate suffixes (64 KB)...".into(),
+                    done: 0,
+                    total: total_suffix_files,
+                });
+            }
+
+            let suffix_counter = std::sync::atomic::AtomicUsize::new(0);
+            let suffix_results: Vec<Option<(usize, [u8; 32], [u8; 32], &FileEntry)>> = suffix_hash_items
+                .par_iter()
+                .map(|(g_idx, prefix_hash, file)| {
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    let res = match Self::hash_suffix(&file.path, file.size, cancel_flag) {
+                        Ok(Some(shash)) => Some((*g_idx, *prefix_hash, shash, *file)),
+                        _ => None,
+                    };
+                    let done = suffix_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % 100 == 0 || done == total_suffix_files {
+                        if let Some(tx) = progress_tx {
+                            let _ = tx.send(DuplicateMessage::Progress {
+                                stage: "Hashing candidate suffixes (64 KB)...".into(),
+                                done,
+                                total: total_suffix_files,
+                            });
+                        }
+                    }
+                    res
+                })
+                .collect();
+
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Vec::new();
+            }
+
+            let mut suffix_groups: HashMap<(usize, [u8; 32], [u8; 32]), Vec<&FileEntry>> = HashMap::new();
+            for item in suffix_results.into_iter().flatten() {
+                suffix_groups.entry((item.0, item.1, item.2)).or_default().push(item.3);
+            }
+
+            for ((g_idx, prefix_hash, _), candidates) in suffix_groups {
+                if candidates.len() >= 2 {
+                    if candidates[0].size <= (PREFIX_HASH_LEN + SUFFIX_HASH_LEN) as u64 {
+                        // Entire file covered by prefix + suffix
+                        let cluster = Self::build_cluster_from_group(
+                            format!("cluster_h{cluster_idx}"),
+                            &candidates,
+                            Some(prefix_hash),
+                        );
+                        clusters.push(cluster);
+                        cluster_idx += 1;
+                    } else {
+                        for file in candidates {
+                            full_hash_items.push((g_idx, prefix_hash, file));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 3: Full Streaming SHA-256 (1MB buffer) for files > 128KB
         let total_full_files = full_hash_items.len();
         if total_full_files > 0 {
             if let Some(tx) = progress_tx {
@@ -426,13 +496,33 @@ impl DuplicateEngine {
         clusters
     }
 
+    fn hash_suffix(
+        path: &Path,
+        file_size: u64,
+        cancel: &AtomicBool,
+    ) -> std::io::Result<Option<[u8; 32]>> {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+
+        let mut file = File::open(path)?;
+        let offset = file_size.saturating_sub(SUFFIX_HASH_LEN as u64);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buffer = vec![0u8; SUFFIX_HASH_LEN];
+        let n = file.read(&mut buffer)?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&buffer[..n]);
+        Ok(Some(hasher.finalize().into()))
+    }
+
     fn hash_prefix(path: &Path, cancel: &AtomicBool) -> std::io::Result<Option<[u8; 32]>> {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
 
         let mut file = File::open(path)?;
-        let mut buffer = [0u8; PREFIX_HASH_LEN];
+        let mut buffer = vec![0u8; PREFIX_HASH_LEN];
         let n = file.read(&mut buffer)?;
 
         let mut hasher = Sha256::new();
@@ -451,7 +541,7 @@ impl DuplicateEngine {
 
         let mut file = File::open(path)?;
         let mut hasher = Sha256::new();
-        let mut buffer = [0u8; STREAM_BUFFER_SIZE];
+        let mut buffer = vec![0u8; STREAM_BUFFER_SIZE];
         let mut total_read = 0u64;
 
         loop {

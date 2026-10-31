@@ -161,17 +161,28 @@ mod win {
         drives
     }
 
-    pub fn get_allocated_size(path: &Path, file_size: u64) -> u64 {
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        let mut high = 0u32;
-        let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
-        if low != 0xFFFF_FFFF || high != 0 {
-            ((high as u64) << 32) | (low as u64)
-        } else if file_size == 0 {
-            0
-        } else {
-            file_size.div_ceil(4096) * 4096
+    pub fn get_allocated_size_from_meta(path: &Path, meta: Option<&std::fs::Metadata>, file_size: u64) -> u64 {
+        if file_size == 0 {
+            return 0;
         }
+        use std::os::windows::fs::MetadataExt;
+        let attrs = meta.map(|m| m.file_attributes()).unwrap_or(0);
+        const FILE_ATTRIBUTE_SPARSE_FILE: u32 = 0x00000200;
+        const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x00000800;
+        if (attrs & (FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_COMPRESSED)) != 0 {
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+            let mut high = 0u32;
+            let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
+            if low != 0xFFFF_FFFF || high != 0 {
+                return ((high as u64) << 32) | (low as u64);
+            }
+        }
+        file_size.saturating_add(4095) / 4096 * 4096
+    }
+
+    pub fn get_allocated_size(path: &Path, file_size: u64) -> u64 {
+        let meta = std::fs::symlink_metadata(path).ok();
+        get_allocated_size_from_meta(path, meta.as_ref(), file_size)
     }
 
     /// Runs a shell verb on a path through the Win32 shell directly (no cmd.exe, no PowerShell),
@@ -308,13 +319,19 @@ mod unix {
         }
     }
 
-    pub fn get_allocated_size(_path: &Path, _file_size: u64) -> u64 {
+    pub fn get_allocated_size_from_meta(_path: &Path, meta: Option<&std::fs::Metadata>, _file_size: u64) -> u64 {
         use std::os::unix::fs::MetadataExt;
-        if let Ok(meta) = _path.metadata() {
-            meta.blocks() * 512
+        if let Some(m) = meta {
+            m.blocks() * 512
+        } else if let Ok(m) = _path.metadata() {
+            m.blocks() * 512
         } else {
             _file_size
         }
+    }
+
+    pub fn get_allocated_size(_path: &Path, _file_size: u64) -> u64 {
+        get_allocated_size_from_meta(_path, None, _file_size)
     }
 
     pub fn restart_as_admin(_current_path: Option<&Path>) -> Result<(), String> {

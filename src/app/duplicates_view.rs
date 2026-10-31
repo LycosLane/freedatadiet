@@ -8,8 +8,8 @@ use crate::platform;
 use super::modals::{ActiveContextMenu, DeleteConfirmState, DeleteModalFocus};
 use super::FreeDataDietApp;
 
-#[derive(Clone, Copy)]
-enum DuplicateRowItem {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DuplicateRowItem {
     Header(usize),
     Occurrence(usize, usize),
 }
@@ -266,17 +266,21 @@ impl FreeDataDietApp {
             return;
         }
 
-        // Build flat row mapping for virtualized rendering (skipping ignored clusters)
-        let mut flat_rows: Vec<DuplicateRowItem> = Vec::new();
-        for c_idx in 0..self.duplicate_clusters.len() {
-            if self.ignored_cluster_ids.contains(&self.duplicate_clusters[c_idx].cluster_id) {
-                continue;
+        // Build or reuse cached flat row mapping for virtualized rendering (skipping ignored clusters)
+        if self.duplicate_flat_rows_dirty || self.cached_duplicate_flat_rows.is_empty() {
+            self.cached_duplicate_flat_rows.clear();
+            for c_idx in 0..self.duplicate_clusters.len() {
+                if self.ignored_cluster_ids.contains(&self.duplicate_clusters[c_idx].cluster_id) {
+                    continue;
+                }
+                self.cached_duplicate_flat_rows.push(DuplicateRowItem::Header(c_idx));
+                for o_idx in 0..self.duplicate_clusters[c_idx].occurrences.len() {
+                    self.cached_duplicate_flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
+                }
             }
-            flat_rows.push(DuplicateRowItem::Header(c_idx));
-            for o_idx in 0..self.duplicate_clusters[c_idx].occurrences.len() {
-                flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
-            }
+            self.duplicate_flat_rows_dirty = false;
         }
+        let flat_rows = self.cached_duplicate_flat_rows.clone();
         let total_rows = flat_rows.len();
 
         let mut scroll_to_selected = self.force_scroll_to_selected;
@@ -317,6 +321,7 @@ impl FreeDataDietApp {
                         let new_val = !cluster.is_group_selected;
                         cluster.set_group_selected(new_val);
                         stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
                     }
                     DuplicateRowItem::Occurrence(c_idx, o_idx) => {
                         let cluster = &mut self.duplicate_clusters[c_idx];
@@ -326,6 +331,7 @@ impl FreeDataDietApp {
                             let occ_path = occ.path.clone();
                             cluster.set_copy_selected(&occ_path, new_val);
                             stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
                             if new_val && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                 let first_p = cluster.occurrences.first().map(|o| o.path.clone());
                                 new_warning = Some((
@@ -423,6 +429,7 @@ impl FreeDataDietApp {
                                     {
                                         cluster.set_group_selected(group_sel);
                                         stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
                                     }
 
                                     ui.label(
@@ -470,6 +477,7 @@ impl FreeDataDietApp {
                                                 occ.is_selected = i > 0 && !occ.is_system_protected;
                                             }
                                             stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
                                         }
                                     });
                                 });
@@ -507,6 +515,7 @@ impl FreeDataDietApp {
                                     if cb.changed() {
                                         cluster.set_copy_selected(&occ_path, copy_checked);
                                         stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
                                         if copy_checked && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                             let first_p = cluster.occurrences.first().map(|o| o.path.clone());
                                             new_warning = Some((
@@ -586,6 +595,7 @@ impl FreeDataDietApp {
                 std::time::Instant::now(),
             ));
             stats_dirty = true;
+            self.duplicate_flat_rows_dirty = true;
         }
 
         if stats_dirty {

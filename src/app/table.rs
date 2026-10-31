@@ -284,7 +284,12 @@ impl FreeDataDietApp {
         let mut open_context_menu: Option<ActiveContextMenu> = None;
         let mut do_navigate_up = false;
 
-        if self.visible_indices_dirty || self.visible_indices.len() > self.entries.len() {
+        let entries_len = self.entries.len();
+        let indices_invalid = self.visible_indices_dirty
+            || self.visible_indices.len() > entries_len
+            || self.visible_indices.iter().any(|&idx| idx >= entries_len);
+
+        if indices_invalid {
             self.update_visible_indices();
         }
         let num_visible = self.visible_indices.len();
@@ -676,8 +681,16 @@ impl FreeDataDietApp {
                                         .desired_width(w - 10.0);
                                     child_ui.add(bar);
                                 } else {
-                                    let ratio = (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32;
-                                    let percent = entry.size as f64 / base_size * 100.0;
+                                    let ratio = if base_size > 0.0 && !base_size.is_nan() {
+                                        (entry.size as f64 / base_size).clamp(0.0, 1.0) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    let percent = if base_size > 0.0 && !base_size.is_nan() {
+                                        entry.size as f64 / base_size * 100.0
+                                    } else {
+                                        0.0
+                                    };
                                     let text = if percent >= 0.1 {
                                         format!("{:.1}%", percent)
                                     } else if percent > 0.0 {

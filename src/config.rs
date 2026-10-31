@@ -626,7 +626,9 @@ impl AppConfig {
                 }
             }
             // Unreadable or corrupt file: keep a copy instead of silently overwriting the user's settings
-            let _ = std::fs::rename(&path, path.with_extension("json.bak"));
+            let bak = path.with_extension("json.bak");
+            let _ = std::fs::remove_file(&bak);
+            let _ = std::fs::rename(&path, &bak);
         }
         let cfg = Self::default();
         let _ = cfg.save();
@@ -635,13 +637,21 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), std::io::Error> {
         let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        // Write to a temp file and rename so a crash mid-write cannot leave a truncated config
+        // Write to a temp file, flush to disk, and rename so a crash mid-write cannot leave a truncated config
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+        }
         if std::fs::rename(&tmp, &path).is_err() {
             // Fallback for filesystem locking (e.g. Windows AV/file indexer holding handle)
-            std::fs::copy(&tmp, &path)?;
+            let _ = std::fs::copy(&tmp, &path);
             let _ = std::fs::remove_file(&tmp);
         }
         Ok(())
