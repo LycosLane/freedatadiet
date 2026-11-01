@@ -93,6 +93,12 @@ impl UpdateManager {
     }
 }
 
+impl Default for UpdateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn run_updater_loop(status: Arc<Mutex<UpdateStatus>>, action_rx: Receiver<UpdateAction>) {
     while let Ok(action) = action_rx.recv() {
         match action {
@@ -171,7 +177,7 @@ pub fn is_newer_version(remote_tag: &str, current_ver: &str) -> bool {
     let parse_nums = |s: &str| -> (u32, u32, u32) {
         let clean = s.trim().trim_start_matches('v');
         let parts: Vec<&str> = clean.split('.').collect();
-        let major = parts.get(0).and_then(|x| x.parse().ok()).unwrap_or(0);
+        let major = parts.first().and_then(|x| x.parse().ok()).unwrap_or(0);
         let minor = parts.get(1).and_then(|x| x.parse().ok()).unwrap_or(0);
         let patch = parts.get(2).and_then(|x| {
             // handle suffixes like 1-beta or 1-1

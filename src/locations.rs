@@ -36,11 +36,10 @@ impl LocationManager {
         let now = Instant::now();
         let map = self.statuses.lock().unwrap_or_else(|p| p.into_inner());
 
-        if let Some(status) = map.get(path) {
-            if now.duration_since(status.last_checked) < Duration::from_secs(5) {
+        if let Some(status) = map.get(path)
+            && now.duration_since(status.last_checked) < Duration::from_secs(5) {
                 return status.is_accessible;
             }
-        }
 
         // Spawn background probe if expired or missing so UI never blocks on offline SMB/USB
         let path_clone = path.to_path_buf();
@@ -66,42 +65,35 @@ impl LocationManager {
     pub fn resolve_startup_path(&self, config: &AppConfig, fallback_drive: &Path) -> PathBuf {
         match config.startup_mode {
             StartupLocationMode::FirstFavorite => {
-                if let Some(first_fav) = config.saved_locations.iter().find(|l| l.is_favorite) {
-                    if first_fav.path.exists() {
+                if let Some(first_fav) = config.saved_locations.iter().find(|l| l.is_favorite)
+                    && first_fav.path.exists() {
                         return first_fav.path.clone();
                     }
-                }
-                if let Some(first) = config.saved_locations.first() {
-                    if first.path.exists() {
+                if let Some(first) = config.saved_locations.first()
+                    && first.path.exists() {
                         return first.path.clone();
                     }
-                }
-                if config.remember_last_path {
-                    if let Some(last) = &config.last_path {
-                        if last.exists() {
+                if config.remember_last_path
+                    && let Some(last) = &config.last_path
+                        && last.exists() {
                             return last.clone();
                         }
-                    }
-                }
                 fallback_drive.to_path_buf()
             }
             StartupLocationMode::LastVisitedPath => {
-                if config.remember_last_path {
-                    if let Some(last) = &config.last_path {
-                        if last.exists() {
+                if config.remember_last_path
+                    && let Some(last) = &config.last_path
+                        && last.exists() {
                             return last.clone();
                         }
-                    }
-                }
                 fallback_drive.to_path_buf()
             }
             StartupLocationMode::PrimaryDrive => fallback_drive.to_path_buf(),
             StartupLocationMode::CustomPath => {
-                if let Some(custom) = &config.custom_startup_path {
-                    if custom.exists() {
+                if let Some(custom) = &config.custom_startup_path
+                    && custom.exists() {
                         return custom.clone();
                     }
-                }
                 fallback_drive.to_path_buf()
             }
         }

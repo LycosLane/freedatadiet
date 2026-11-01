@@ -99,15 +99,14 @@ impl FreeDataDietApp {
                     self.dragged_column_idx = Some(idx);
                 }
 
-                if is_dragging && header_resp.dragged() {
-                    if let Some(mouse_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                if is_dragging && header_resp.dragged()
+                    && let Some(mouse_pos) = ui.input(|i| i.pointer.interact_pos()) {
                         if mouse_pos.x < header_rect.min.x - 8.0 && idx > 0 {
                             swap_columns = Some((idx, idx - 1));
                         } else if mouse_pos.x > header_rect.max.x + 8.0 && idx + 1 < self.config.column_order.len() {
                             swap_columns = Some((idx, idx + 1));
                         }
                     }
-                }
 
                 if header_resp.drag_stopped() {
                     self.dragged_column_idx = None;
@@ -470,8 +469,8 @@ impl FreeDataDietApp {
                 scroll_to_selected = true;
             }
 
-            if is_main_focus && enter {
-                if let Some(vidx) = selected_visible_idx {
+            if is_main_focus && enter
+                && let Some(vidx) = selected_visible_idx {
                     let entry = &self.entries[self.visible_indices[vidx]];
                     if entry.is_dir {
                         navigate_target = Some(entry.path.clone());
@@ -479,19 +478,17 @@ impl FreeDataDietApp {
                         let _ = platform::open_file(&entry.path);
                     }
                 }
-            }
 
-            if is_main_focus && right {
-                if let Some(vidx) = selected_visible_idx {
+            if is_main_focus && right
+                && let Some(vidx) = selected_visible_idx {
                     let entry = &self.entries[self.visible_indices[vidx]];
                     if entry.is_dir {
                         navigate_target = Some(entry.path.clone());
                     }
                 }
-            }
 
-            if is_main_focus && del {
-                if let Some(vidx) = selected_visible_idx {
+            if is_main_focus && del
+                && let Some(vidx) = selected_visible_idx {
                     let can_delete = if shift {
                         self.config.shortcuts.shift_del_permanent
                     } else {
@@ -512,10 +509,9 @@ impl FreeDataDietApp {
                         };
                     }
                 }
-            }
 
-            if is_main_focus && context_key && selected_visible_idx.is_some() {
-                let entry = &self.entries[self.visible_indices[selected_visible_idx.unwrap()]];
+            if let (true, true, Some(sel)) = (is_main_focus, context_key, selected_visible_idx) {
+                let entry = &self.entries[self.visible_indices[sel]];
                 open_context_menu = Some(ActiveContextMenu {
                     path: entry.path.clone(),
                     name: entry.name.clone(),
@@ -559,13 +555,12 @@ impl FreeDataDietApp {
 
         let row_height = 20.0;
         let mut scroll_area = ScrollArea::vertical().auto_shrink([false, false]);
-        if scroll_to_selected {
-            if let Some(target_idx) = selected_visible_idx {
+        if scroll_to_selected
+            && let Some(target_idx) = selected_visible_idx {
                 let approx_viewport_height = ui.available_height();
                 let target_y = (target_idx as f32 * row_height - approx_viewport_height / 2.0).max(0.0);
                 scroll_area = scroll_area.vertical_scroll_offset(target_y);
             }
-        }
 
         let flatten_active = self.config.flatten_subfolders;
         let current_root = self.current_path.clone();

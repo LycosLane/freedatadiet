@@ -735,15 +735,14 @@ fn scan_flattened(
                         total_counter.fetch_add(1, Ordering::Relaxed);
                         batch.push(f);
                     }
-                    if batch.len() >= 2048 {
-                        if tx
+                    if batch.len() >= 2048
+                        && tx
                             .send(ScanMessage::InitialEntries(std::mem::take(&mut batch)))
                             .is_err()
                         {
                             cancel.store(true, Ordering::Relaxed);
                             return;
                         }
-                    }
                     if last_progress.elapsed() > Duration::from_millis(50) {
                         let count = total_counter.load(Ordering::Relaxed);
                         let _ = tx.send(ScanMessage::Progress { scanned_items: count });
@@ -769,15 +768,14 @@ fn scan_flattened(
                     );
                     batch.push(folder_entry);
 
-                    if batch.len() >= 2048 {
-                        if tx
+                    if batch.len() >= 2048
+                        && tx
                             .send(ScanMessage::InitialEntries(std::mem::take(&mut batch)))
                             .is_err()
                         {
                             cancel.store(true, Ordering::Relaxed);
                             return;
                         }
-                    }
                 }
 
                 if let Some(parent) = stack.last_mut() {

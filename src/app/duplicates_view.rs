@@ -47,7 +47,6 @@ impl FreeDataDietApp {
                     self.config.show_duplicates_only = false;
                     self.save_config();
                     self.trigger_scan();
-                    return;
                 }
             });
         });
@@ -230,11 +229,11 @@ impl FreeDataDietApp {
                             sugg.folder_name.clone()
                         };
                         let (btn_action_label, is_unsel) = match sugg.action {
-                            crate::duplicate::SuggestionAction::Select => (
+                            crate::duplicate_suggestion::SuggestionAction::Select => (
                                 format!("Select Copies in \"{}\"", folder_display),
                                 false,
                             ),
-                            crate::duplicate::SuggestionAction::Unselect => (
+                            crate::duplicate_suggestion::SuggestionAction::Unselect => (
                                 format!("Unselect Copies in \"{}\"", folder_display),
                                 true,
                             ),
@@ -259,7 +258,7 @@ impl FreeDataDietApp {
         if apply_sugg {
             if let Some(sugg) = &self.active_suggestion {
                 let candidates = sugg.candidate_paths.clone();
-                let sel_val = sugg.action == crate::duplicate::SuggestionAction::Select;
+                let sel_val = sugg.action == crate::duplicate_suggestion::SuggestionAction::Select;
                 for cluster in &mut self.duplicate_clusters {
                     for occ in &mut cluster.occurrences {
                         if candidates.contains(&occ.path) && !occ.is_system_protected {
@@ -300,11 +299,10 @@ impl FreeDataDietApp {
                             }),
                         );
                         ui.add_space(8.0);
-                        if let Some(fp) = first_path {
-                            if ui.button("Jump to First Occurrence").clicked() {
+                        if let Some(fp) = first_path
+                            && ui.button("Jump to First Occurrence").clicked() {
                                 jump_to_first = Some(fp.clone());
                             }
-                        }
                         if ui.button("Dismiss").clicked() {
                             clear_warn = true;
                         }
@@ -450,12 +448,11 @@ impl FreeDataDietApp {
                 }
             }
 
-            if enter && self.selected_duplicate_row_idx < total_rows {
-                if let DuplicateRowItem::Occurrence(c_idx, o_idx) = flat_rows[self.selected_duplicate_row_idx] {
+            if enter && self.selected_duplicate_row_idx < total_rows
+                && let DuplicateRowItem::Occurrence(c_idx, o_idx) = flat_rows[self.selected_duplicate_row_idx] {
                     let occ = &self.duplicate_clusters[c_idx].occurrences[o_idx];
                     let _ = platform::open_in_file_manager(&occ.path);
                 }
-            }
 
             if del && self.duplicate_eligible_count > 0 {
                 let can_delete = if shift {

@@ -52,11 +52,9 @@ impl FreeDataDietApp {
                     } else if ui
                         .button(RichText::new("Restart as Admin").small())
                         .clicked()
-                    {
-                        if let Err(msg) = platform::restart_as_admin(Some(&self.current_path)) {
+                        && let Err(msg) = platform::restart_as_admin(Some(&self.current_path)) {
                             self.status_toast = Some((msg, Instant::now()));
                         }
-                    }
 
                     // --- UPDATE BUTTON / INDICATOR ---
                     match self.updater.status() {
@@ -187,14 +185,13 @@ impl FreeDataDietApp {
                     self.trigger_scan();
                 }
 
-                if do_browse {
-                    if let Some(folder) = rfd::FileDialog::new()
+                if do_browse
+                    && let Some(folder) = rfd::FileDialog::new()
                         .set_directory(&self.current_path)
                         .pick_folder()
                     {
                         self.navigate_to(folder);
                     }
-                }
                 if toggle_duplicates {
                     self.config.show_duplicates_only = !self.config.show_duplicates_only;
                     self.save_config();

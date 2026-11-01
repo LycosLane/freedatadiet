@@ -638,8 +638,8 @@ impl AppConfig {
     pub fn load() -> Self {
         let path = Self::config_path();
         if path.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&contents) {
+            if let Ok(contents) = std::fs::read_to_string(&path)
+                && let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&contents) {
                     cfg = cfg.migrate_legacy();
                     if !cfg.column_order.contains(&ColumnId::Type) {
                         cfg.column_order.insert(0, ColumnId::Type);
@@ -654,7 +654,6 @@ impl AppConfig {
                     }
                     return cfg;
                 }
-            }
             // Unreadable or corrupt file: keep a copy instead of silently overwriting the user's settings
             let bak = path.with_extension("json.bak");
             let _ = std::fs::remove_file(&bak);

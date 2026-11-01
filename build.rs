@@ -74,11 +74,10 @@ END
             .args(["/fo", res_path.to_str().unwrap(), rc_path.to_str().unwrap()])
             .status();
 
-        if let Ok(s) = status {
-            if s.success() {
+        if let Ok(s) = status
+            && s.success() {
                 println!("cargo:rustc-link-arg-bins={}", res_path.to_str().unwrap());
             }
-        }
     } else {
         // GNU / MinGW toolchains (windres / llvm-windres)
         let o_path = PathBuf::from(&out_dir).join("freedatadiet_res.o");
@@ -91,11 +90,10 @@ END
                     .status()
             });
 
-        if let Ok(s) = status {
-            if s.success() {
+        if let Ok(s) = status
+            && s.success() {
                 // Do not link Windows resource object into test runner binaries
                 println!("cargo:rustc-link-arg-bins={}", o_path.to_str().unwrap());
             }
-        }
     }
 }

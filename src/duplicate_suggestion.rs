@@ -117,7 +117,6 @@ mod tests {
             cluster_id: "c1".to_string(),
             primary_name: "file1.mp4".to_string(),
             file_size: 100,
-            hash: None,
             is_group_selected: false,
             occurrences: vec![
                 DuplicateOccurrence {
@@ -147,7 +146,6 @@ mod tests {
             cluster_id: "c2".to_string(),
             primary_name: "file2.mp4".to_string(),
             file_size: 200,
-            hash: None,
             is_group_selected: false,
             occurrences: vec![
                 DuplicateOccurrence {

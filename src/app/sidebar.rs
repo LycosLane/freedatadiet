@@ -143,12 +143,11 @@ impl FreeDataDietApp {
                 // --- 2. FAVORITES (WITH CTRL+CLICK MULTI-SELECT) ---
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Favorites").size(13.5).strong());
-                    if self.selected_favorites.len() > 1 {
-                        if ui.small_button(format!("Clear ({})", self.selected_favorites.len())).clicked() {
+                    if self.selected_favorites.len() > 1
+                        && ui.small_button(format!("Clear ({})", self.selected_favorites.len())).clicked() {
                             self.selected_favorites.clear();
                             trigger_rescan = true;
                         }
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("+ Add Current")

@@ -256,15 +256,12 @@ impl FreeDataDietApp {
                 ui.add_space(4.0);
             });
 
-            if let Some(wresp) = resp {
-                if !menu.just_opened && ui.input(|i| i.pointer.any_pressed()) {
-                    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                        if !wresp.response.rect.contains(pos) {
+            if let Some(wresp) = resp
+                && !menu.just_opened && ui.input(|i| i.pointer.any_pressed())
+                    && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                        && !wresp.response.rect.contains(pos) {
                             close_menu = true;
                         }
-                    }
-                }
-            }
 
             if let Some(action) = triggered_action {
                 match action {
@@ -694,11 +691,10 @@ impl FreeDataDietApp {
             if delete_empty {
                 let mut deleted_count = 0usize;
                 for p in empty_folders {
-                    if !crate::model::is_root_or_system(p) && !crate::model::is_drive_root(p) {
-                        if std::fs::remove_dir(p).is_ok() || trash::delete(p).is_ok() {
+                    if !crate::model::is_root_or_system(p) && !crate::model::is_drive_root(p)
+                        && (std::fs::remove_dir(p).is_ok() || trash::delete(p).is_ok()) {
                             deleted_count += 1;
                         }
-                    }
                 }
                 self.status_toast = Some((
                     format!("Cleaned up {} empty folder(s)", deleted_count),
@@ -750,12 +746,11 @@ impl FreeDataDietApp {
                     ui.separator();
 
                     ui.horizontal(|ui| {
-                        if update.download_url.is_some() {
-                            if ui.button(RichText::new("Download & Restart").strong().color(Color32::from_rgb(60, 220, 120))).clicked() {
+                        if update.download_url.is_some()
+                            && ui.button(RichText::new("Download & Restart").strong().color(Color32::from_rgb(60, 220, 120))).clicked() {
                                 self.updater.start_download((**update).clone());
                                 close_modal = true;
                             }
-                        }
 
                         if ui.button("Open GitHub Release").clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(&update.release_url));
@@ -774,15 +769,12 @@ impl FreeDataDietApp {
                     });
                 });
 
-                if let Some(resp) = win_resp {
-                    if ui.input(|i| i.pointer.any_pressed()) {
-                        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                            if !resp.response.rect.contains(pos) {
+                if let Some(resp) = win_resp
+                    && ui.input(|i| i.pointer.any_pressed())
+                        && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                            && !resp.response.rect.contains(pos) {
                                 close_modal = true;
                             }
-                        }
-                    }
-                }
             } else {
                 close_modal = true;
             }

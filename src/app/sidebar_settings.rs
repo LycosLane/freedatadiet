@@ -53,8 +53,8 @@ pub fn setting_pill(
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(label).strong().color(text_color));
-                if show_shortcuts {
-                    if let Some(sc) = shortcut {
+                if show_shortcuts
+                    && let Some(sc) = shortcut {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let badge_col = if is_active {
                                 Color32::from_rgb(230, 240, 255)
@@ -66,7 +66,6 @@ pub fn setting_pill(
                             ui.label(RichText::new(format!("[{}]", sc)).small().monospace().color(badge_col));
                         });
                     }
-                }
             });
         })
         .response;
@@ -339,8 +338,8 @@ impl FreeDataDietApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Ignored Locations").size(13.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("+ Add Folder...").on_hover_text("Add a folder to scan exclusions or duplicate ignore list").clicked() {
-                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                if ui.small_button("+ Add Folder...").on_hover_text("Add a folder to scan exclusions or duplicate ignore list").clicked()
+                    && let Some(folder) = rfd::FileDialog::new().pick_folder() {
                         let folder_name = folder
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
@@ -358,7 +357,6 @@ impl FreeDataDietApp {
                             *recompute_dups = true;
                         }
                     }
-                }
             });
         });
         ui.label(RichText::new("Click scope badge to switch between Hide and Ignore Duplicates").weak().small());

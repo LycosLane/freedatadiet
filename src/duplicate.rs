@@ -1,21 +1,19 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use sha2::{Digest, Sha256};
-use rayon::prelude::*;
 
 use crate::config::DuplicateCriteriaConfig;
+use crate::duplicate_hashing::{
+    hash_full, hash_prefix, hash_suffix, refine, Group, Hash, ScanContext, PREFIX_HASH_LEN,
+    SUFFIX_HASH_LEN,
+};
 use crate::model::FileEntry;
 use crate::platform::{get_file_id_and_links, FileId};
 
-pub const PREFIX_HASH_LEN: usize = 64 * 1024;
-pub const SUFFIX_HASH_LEN: usize = 64 * 1024;
-pub const STREAM_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DuplicateOccurrence {
@@ -34,7 +32,6 @@ pub struct DuplicateCluster {
     pub cluster_id: String,
     pub primary_name: String,
     pub file_size: u64,
-    pub hash: Option<[u8; 32]>,
     pub is_group_selected: bool,
     pub occurrences: Vec<DuplicateOccurrence>,
 }
@@ -64,11 +61,10 @@ impl DuplicateCluster {
     /// If all copies are selected but the file header checkbox is NOT checked,
     /// complete purge is blocked. Returns Ok(()) or Err(first_occurrence_path).
     pub fn validate_deletion_safety(&self) -> Result<(), PathBuf> {
-        if self.are_all_copies_selected() && !self.is_group_selected {
-            if let Some(first) = self.occurrences.first() {
+        if self.are_all_copies_selected() && !self.is_group_selected
+            && let Some(first) = self.occurrences.first() {
                 return Err(first.path.clone());
             }
-        }
         Ok(())
     }
 
@@ -120,11 +116,10 @@ impl DuplicateCluster {
     pub fn set_copy_selected(&mut self, path: &Path, selected: bool) {
         let mut all_now_selected = true;
         for occ in &mut self.occurrences {
-            if occ.path == path {
-                if !occ.is_system_protected {
+            if occ.path == path
+                && !occ.is_system_protected {
                     occ.is_selected = selected;
                 }
-            }
             if !occ.is_selected {
                 all_now_selected = false;
             }
@@ -145,9 +140,6 @@ pub enum DuplicateMessage {
     Completed(Vec<DuplicateCluster>),
 }
 
-pub use crate::duplicate_suggestion::{
-    find_folder_suggestion, find_manual_folder_suggestion, DuplicateSuggestion, SuggestionAction,
-};
 
 fn subpartition_by<T, K, F>(groups: Vec<Vec<T>>, key_fn: F) -> Vec<Vec<T>>
 where
@@ -160,470 +152,145 @@ where
         for item in group {
             map.entry(key_fn(&item)).or_default().push(item);
         }
-        for (_, sub) in map {
-            if sub.len() >= 2 {
-                result.push(sub);
-            }
-        }
+        result.extend(map.into_values().filter(|sub| sub.len() >= 2));
     }
     result
+}
+
+/// Moves groups whose files are fully covered by `covered_bytes` into
+/// `finished`; returns the groups that still need a deeper hash pass.
+fn split_finished<'a>(
+    hashed: Vec<(Group<'a>, Hash)>,
+    covered_bytes: u64,
+    finished: &mut Vec<Group<'a>>,
+) -> Vec<Group<'a>> {
+    let mut pending = Vec::new();
+    for (group, _) in hashed {
+        if group[0].size <= covered_bytes {
+            finished.push(group);
+        } else {
+            pending.push(group);
+        }
+    }
+    pending
 }
 
 pub struct DuplicateEngine;
 
 impl DuplicateEngine {
     /// Detects duplicate files from a list of scanned entries according to criteria.
-    /// Uses 3-stage verification (64KB Prefix Hash -> 64KB Suffix Hash -> 1MB Streamed Full SHA-256)
-    /// with optional progress reporting.
+    /// Metadata partitions (size, name, timestamp) run first, then optional
+    /// 3-stage verification (64KB prefix, 64KB suffix, streamed full SHA-256).
+    /// The final result is also sent as `DuplicateMessage::Completed` when a
+    /// progress channel is given. A cancelled scan returns an empty list.
     pub fn find_duplicates(
         entries: &[FileEntry],
         criteria: DuplicateCriteriaConfig,
         cancel_flag: &Arc<AtomicBool>,
-        progress_tx: Option<&std::sync::mpsc::Sender<DuplicateMessage>>,
+        progress_tx: Option<&Sender<DuplicateMessage>>,
     ) -> Vec<DuplicateCluster> {
-        let files: Vec<&FileEntry> = entries
-            .iter()
-            .filter(|e| !e.is_dir && e.size > 0)
-            .collect();
-
-        if files.len() < 2 {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
-            }
+        let ctx = ScanContext { cancel: cancel_flag, tx: progress_tx };
+        let Some(clusters) = Self::run_pipeline(entries, &criteria, &ctx) else {
             return Vec::new();
-        }
-
-        if let Some(tx) = progress_tx {
-            let _ = tx.send(DuplicateMessage::Progress {
-                stage: "Partitioning candidate files by size...".into(),
-                done: 0,
-                total: files.len(),
-            });
-        }
-
-        // Stage 1: Partition by file size (u64) if match_size is enabled
-        let size_groups: Vec<Vec<&FileEntry>> = if criteria.match_size {
-            let mut size_map: HashMap<u64, Vec<&FileEntry>> = HashMap::new();
-            for file in files {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-                size_map.entry(file.size).or_default().push(file);
-            }
-            size_map.into_values().filter(|g| g.len() >= 2).collect()
-        } else {
-            vec![files]
         };
-
-        if size_groups.is_empty() {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
-            }
-            return Vec::new();
-        }
-
-        // Stage 2: Sub-partition by case-insensitive name if match_name is enabled
-        let name_groups: Vec<Vec<&FileEntry>> = if criteria.match_name {
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
-            subpartition_by(size_groups, |file| file.name.to_lowercase())
-        } else {
-            size_groups
-        };
-
-        if name_groups.is_empty() {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
-            }
-            return Vec::new();
-        }
-
-        // Stage 3: Sub-partition by modification timestamp if match_timestamp is enabled
-        let metadata_groups: Vec<Vec<&FileEntry>> = if criteria.match_timestamp {
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
-            subpartition_by(name_groups, |file| file.modified)
-        } else {
-            name_groups
-        };
-
-        if metadata_groups.is_empty() {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Completed(Vec::new()));
-            }
-            return Vec::new();
-        }
-
-        let mut clusters = Vec::new();
-        let mut cluster_idx = 1;
-
-        if !criteria.verify_hash {
-            for group in metadata_groups {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return Vec::new();
-                }
-                if group.len() >= 2 {
-                    let cluster = Self::build_cluster_from_group(
-                        format!("cluster_{cluster_idx}"),
-                        &group,
-                        None,
-                    );
-                    clusters.push(cluster);
-                    cluster_idx += 1;
-                }
-            }
-            clusters.sort_by(|a, b| b.wasted_bytes().cmp(&a.wasted_bytes()));
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Completed(clusters.clone()));
-            }
-            return clusters;
-        }
-
-        // --- VERIFY HASH (PARALLEL MULTI-STAGE WITH RAYON & PROGRESS) ---
-        let mut indexed_candidates: Vec<(usize, &FileEntry)> = Vec::new();
-        for (g_idx, group) in metadata_groups.iter().enumerate() {
-            for file in group {
-                indexed_candidates.push((g_idx, *file));
-            }
-        }
-
-        let total_prefix_files = indexed_candidates.len();
-        if let Some(tx) = progress_tx {
-            let _ = tx.send(DuplicateMessage::Progress {
-                stage: "Hashing candidate headers (64 KB)...".into(),
-                done: 0,
-                total: total_prefix_files,
-            });
-        }
-
-        // Pass 1: 64 KB Prefix Hash
-        let prefix_counter = std::sync::atomic::AtomicUsize::new(0);
-        let prefix_results: Vec<Option<(usize, [u8; 32], &FileEntry)>> = indexed_candidates
-            .par_iter()
-            .map(|(g_idx, file)| {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    return None;
-                }
-                let res = match Self::hash_prefix(&file.path, cancel_flag) {
-                    Ok(Some(hash)) => Some((*g_idx, hash, *file)),
-                    _ => None,
-                };
-                let done = prefix_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if done % 200 == 0 || done == total_prefix_files {
-                    if let Some(tx) = progress_tx {
-                        let _ = tx.send(DuplicateMessage::Progress {
-                            stage: "Hashing candidate headers (64 KB)...".into(),
-                            done,
-                            total: total_prefix_files,
-                        });
-                    }
-                }
-                res
-            })
-            .collect();
-
-        if cancel_flag.load(Ordering::Relaxed) {
-            return Vec::new();
-        }
-
-        // Group survivors by (g_idx, prefix_hash)
-        let mut prefix_groups: HashMap<(usize, [u8; 32]), Vec<&FileEntry>> = HashMap::new();
-        for item in prefix_results.into_iter().flatten() {
-            prefix_groups.entry((item.0, item.1)).or_default().push(item.2);
-        }
-
-        let mut survivor_groups: Vec<((usize, [u8; 32]), Vec<&FileEntry>)> = Vec::new();
-        for (key, candidates) in prefix_groups {
-            if candidates.len() >= 2 {
-                survivor_groups.push((key, candidates));
-            }
-        }
-
-        // Separate small files (<= 64KB, completely verified by prefix hash)
-        let mut suffix_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
-        for ((g_idx, prefix_hash), candidates) in survivor_groups {
-            if candidates[0].size <= PREFIX_HASH_LEN as u64 {
-                let cluster = Self::build_cluster_from_group(
-                    format!("cluster_h{cluster_idx}"),
-                    &candidates,
-                    Some(prefix_hash),
-                );
-                clusters.push(cluster);
-                cluster_idx += 1;
-            } else {
-                for file in candidates {
-                    suffix_hash_items.push((g_idx, prefix_hash, file));
-                }
-            }
-        }
-
-        // Pass 2: 64 KB Suffix Hash for files > 64KB
-        let total_suffix_files = suffix_hash_items.len();
-        let mut full_hash_items: Vec<(usize, [u8; 32], &FileEntry)> = Vec::new();
-
-        if total_suffix_files > 0 {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Progress {
-                    stage: "Hashing candidate suffixes (64 KB)...".into(),
-                    done: 0,
-                    total: total_suffix_files,
-                });
-            }
-
-            let suffix_counter = std::sync::atomic::AtomicUsize::new(0);
-            let suffix_results: Vec<Option<(usize, [u8; 32], [u8; 32], &FileEntry)>> = suffix_hash_items
-                .par_iter()
-                .map(|(g_idx, prefix_hash, file)| {
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        return None;
-                    }
-                    let res = match Self::hash_suffix(&file.path, file.size, cancel_flag) {
-                        Ok(Some(shash)) => Some((*g_idx, *prefix_hash, shash, *file)),
-                        _ => None,
-                    };
-                    let done = suffix_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                    if done % 100 == 0 || done == total_suffix_files {
-                        if let Some(tx) = progress_tx {
-                            let _ = tx.send(DuplicateMessage::Progress {
-                                stage: "Hashing candidate suffixes (64 KB)...".into(),
-                                done,
-                                total: total_suffix_files,
-                            });
-                        }
-                    }
-                    res
-                })
-                .collect();
-
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
-
-            let mut suffix_groups: HashMap<(usize, [u8; 32], [u8; 32]), Vec<&FileEntry>> = HashMap::new();
-            for item in suffix_results.into_iter().flatten() {
-                suffix_groups.entry((item.0, item.1, item.2)).or_default().push(item.3);
-            }
-
-            for ((g_idx, prefix_hash, _), candidates) in suffix_groups {
-                if candidates.len() >= 2 {
-                    if candidates[0].size <= (PREFIX_HASH_LEN + SUFFIX_HASH_LEN) as u64 {
-                        // Entire file covered by prefix + suffix
-                        let cluster = Self::build_cluster_from_group(
-                            format!("cluster_h{cluster_idx}"),
-                            &candidates,
-                            Some(prefix_hash),
-                        );
-                        clusters.push(cluster);
-                        cluster_idx += 1;
-                    } else {
-                        for file in candidates {
-                            full_hash_items.push((g_idx, prefix_hash, file));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Pass 3: Full Streaming SHA-256 (1MB buffer) for files > 128KB
-        let total_full_files = full_hash_items.len();
-        if total_full_files > 0 {
-            if let Some(tx) = progress_tx {
-                let _ = tx.send(DuplicateMessage::Progress {
-                    stage: "Verifying exact SHA-256 hashes...".into(),
-                    done: 0,
-                    total: total_full_files,
-                });
-            }
-
-            let full_counter = std::sync::atomic::AtomicUsize::new(0);
-            let full_results: Vec<Option<(usize, [u8; 32], &FileEntry)>> = full_hash_items
-                .par_iter()
-                .map(|(g_idx, _, file)| {
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        return None;
-                    }
-                    let res = match Self::hash_full_file(&file.path, file.size, cancel_flag) {
-                        Ok(Some(hash)) => Some((*g_idx, hash, *file)),
-                        _ => None,
-                    };
-                    let done = full_counter.fetch_add(1, Ordering::Relaxed) + 1;
-                    if done % 10 == 0 || done == total_full_files {
-                        if let Some(tx) = progress_tx {
-                            let _ = tx.send(DuplicateMessage::Progress {
-                                stage: "Verifying exact SHA-256 hashes...".into(),
-                                done,
-                                total: total_full_files,
-                            });
-                        }
-                    }
-                    res
-                })
-                .collect();
-
-            if cancel_flag.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
-
-            let mut full_groups: HashMap<(usize, [u8; 32]), Vec<&FileEntry>> = HashMap::new();
-            for item in full_results.into_iter().flatten() {
-                full_groups.entry((item.0, item.1)).or_default().push(item.2);
-            }
-
-            for ((_, full_hash), files) in full_groups {
-                if files.len() >= 2 {
-                    let cluster = Self::build_cluster_from_group(
-                        format!("cluster_h{cluster_idx}"),
-                        &files,
-                        Some(full_hash),
-                    );
-                    clusters.push(cluster);
-                    cluster_idx += 1;
-                }
-            }
-        }
-
-        clusters.sort_by(|a, b| b.wasted_bytes().cmp(&a.wasted_bytes()));
         if let Some(tx) = progress_tx {
             let _ = tx.send(DuplicateMessage::Completed(clusters.clone()));
         }
         clusters
     }
 
-    fn hash_suffix(
-        path: &Path,
-        file_size: u64,
-        cancel: &AtomicBool,
-    ) -> std::io::Result<Option<[u8; 32]>> {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(None);
+    /// Returns `None` when cancelled.
+    fn run_pipeline(
+        entries: &[FileEntry],
+        criteria: &DuplicateCriteriaConfig,
+        ctx: &ScanContext,
+    ) -> Option<Vec<DuplicateCluster>> {
+        let files: Vec<&FileEntry> = entries.iter().filter(|e| !e.is_dir && e.size > 0).collect();
+        if files.len() < 2 {
+            return Some(Vec::new());
+        }
+        ctx.progress("Partitioning candidate files by size...", 0, files.len());
+
+        let mut groups: Vec<Group> = vec![files];
+        if criteria.match_size {
+            groups = subpartition_by(groups, |f| f.size);
+        }
+        if criteria.match_name {
+            groups = subpartition_by(groups, |f| f.name.to_lowercase());
+        }
+        if criteria.match_timestamp {
+            groups = subpartition_by(groups, |f| f.modified);
+        }
+        if ctx.cancelled() {
+            return None;
         }
 
-        let mut file = File::open(path)?;
-        let offset = file_size.saturating_sub(SUFFIX_HASH_LEN as u64);
-        file.seek(SeekFrom::Start(offset))?;
-        let mut buffer = vec![0u8; SUFFIX_HASH_LEN];
-        let n = file.read(&mut buffer)?;
+        let mut finished: Vec<Group> = Vec::new();
+        if criteria.verify_hash {
+            let prefix_len = PREFIX_HASH_LEN as u64;
+            let covered_by_both = (PREFIX_HASH_LEN + SUFFIX_HASH_LEN) as u64;
 
-        let mut hasher = Sha256::new();
-        hasher.update(&buffer[..n]);
-        Ok(Some(hasher.finalize().into()))
+            let hashed = refine(&groups, "Hashing candidate headers (64 KB)...", 200, ctx, |f| {
+                hash_prefix(f).map(Some)
+            })?;
+            let groups = split_finished(hashed, prefix_len, &mut finished);
+
+            let hashed = refine(&groups, "Hashing candidate suffixes (64 KB)...", 100, ctx, |f| {
+                hash_suffix(f).map(Some)
+            })?;
+            let groups = split_finished(hashed, covered_by_both, &mut finished);
+
+            let hashed = refine(&groups, "Verifying exact SHA-256 hashes...", 10, ctx, |f| {
+                hash_full(f, ctx.cancel)
+            })?;
+            finished.extend(hashed.into_iter().map(|(group, _)| group));
+        } else {
+            finished = groups;
+        }
+
+        let mut clusters: Vec<DuplicateCluster> =
+            finished.iter().map(|group| Self::build_cluster(group)).collect();
+        clusters.sort_by_key(|c| std::cmp::Reverse(c.wasted_bytes()));
+        Some(clusters)
     }
 
-    fn hash_prefix(path: &Path, cancel: &AtomicBool) -> std::io::Result<Option<[u8; 32]>> {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-
-        let mut file = File::open(path)?;
-        let mut buffer = vec![0u8; PREFIX_HASH_LEN];
-        let n = file.read(&mut buffer)?;
-
-        let mut hasher = Sha256::new();
-        hasher.update(&buffer[..n]);
-        Ok(Some(hasher.finalize().into()))
-    }
-
-    fn hash_full_file(
-        path: &Path,
-        expected_size: u64,
-        cancel: &AtomicBool,
-    ) -> std::io::Result<Option<[u8; 32]>> {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-
-        let mut file = File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; STREAM_BUFFER_SIZE];
-        let mut total_read = 0u64;
-
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(None);
-            }
-            let n = file.read(&mut buffer)?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buffer[..n]);
-            total_read += n as u64;
-        }
-
-        if total_read != expected_size {
-            // File was modified during hashing
-            return Ok(None);
-        }
-
-        Ok(Some(hasher.finalize().into()))
-    }
-
-    fn build_cluster_from_group(
-        id: String,
-        group: &[&FileEntry],
-        hash: Option<[u8; 32]>,
-    ) -> DuplicateCluster {
-        let first = group[0];
-        let mut seen_fids: HashSet<FileId> = HashSet::new();
-
+    fn build_cluster(group: &[&FileEntry]) -> DuplicateCluster {
+        let mut seen_ids: HashSet<FileId> = HashSet::new();
         let occurrences = group
             .iter()
             .map(|entry| {
-                let meta = std::fs::symlink_metadata(&entry.path).ok();
-                let (fid_opt, _) = meta
-                    .as_ref()
-                    .map(|m| get_file_id_and_links(&entry.path, m))
-                    .unwrap_or((None, 1));
-
-                let is_hardlink = if let Some(fid) = fid_opt {
-                    !seen_fids.insert(fid)
-                } else {
-                    false
-                };
-
+                let file_id = std::fs::symlink_metadata(&entry.path)
+                    .ok()
+                    .and_then(|meta| get_file_id_and_links(&entry.path, &meta).0);
                 DuplicateOccurrence {
                     path: entry.path.clone(),
                     name: entry.name.clone(),
                     size: entry.size,
                     modified: entry.modified,
-                    file_id: fid_opt,
-                    is_hardlink,
+                    file_id,
+                    is_hardlink: file_id.is_some_and(|id| !seen_ids.insert(id)),
                     is_system_protected: entry.is_system_protected,
                     is_selected: false,
                 }
             })
             .collect();
 
+        let first = group[0];
         DuplicateCluster {
-            cluster_id: id,
+            // The first path is unique per cluster, so the id stays stable across rescans.
+            cluster_id: first.path.to_string_lossy().into_owned(),
             primary_name: first.name.clone(),
             file_size: first.size,
-            hash,
             is_group_selected: false,
             occurrences,
         }
-    }
-
-    pub fn find_manual_folder_suggestion(
-        clusters: &[DuplicateCluster],
-        toggled_path: &Path,
-        is_now_selected: bool,
-    ) -> Option<DuplicateSuggestion> {
-        crate::duplicate_suggestion::find_manual_folder_suggestion(clusters, toggled_path, is_now_selected)
-    }
-
-    pub fn find_folder_suggestion(
-        clusters: &[DuplicateCluster],
-        selected_paths: &HashSet<PathBuf>,
-    ) -> Option<DuplicateSuggestion> {
-        crate::duplicate_suggestion::find_folder_suggestion(clusters, selected_paths)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
 
     #[test]
@@ -653,7 +320,6 @@ mod tests {
             cluster_id: "c1".into(),
             primary_name: "file.txt".into(),
             file_size: 100,
-            hash: None,
             is_group_selected: false,
             occurrences: vec![occ1, occ2],
         };
@@ -734,6 +400,32 @@ mod tests {
     }
 
     #[test]
+    fn test_large_files_differing_only_in_the_middle() {
+        let dir = std::env::temp_dir().join("fdd_test_large_dups");
+        let _ = std::fs::create_dir_all(&dir);
+        let size = 400 * 1024;
+        let mut data = vec![0x11u8; size];
+        let mut entries = Vec::new();
+        for (name, middle) in [("a.bin", 0x11u8), ("b.bin", 0x11), ("c.bin", 0x22)] {
+            data[size / 2] = middle;
+            let path = dir.join(name);
+            File::create(&path).unwrap().write_all(&data).unwrap();
+            entries.push(FileEntry::new(name.into(), path, false, size as u64, size as u64, None, 1, false, false));
+        }
+        let criteria = DuplicateCriteriaConfig {
+            match_size: true,
+            match_name: false,
+            match_timestamp: false,
+            verify_hash: true,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, None);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].occurrences.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_duplicate_folder_pattern_suggestion() {
         let occ1_a = DuplicateOccurrence {
             path: PathBuf::from("C:\\Keep\\photo1.jpg"),
@@ -781,7 +473,6 @@ mod tests {
             cluster_id: "c1".into(),
             primary_name: "photo1.jpg".into(),
             file_size: 500,
-            hash: None,
             is_group_selected: false,
             occurrences: vec![occ1_a, occ1_b],
         };
@@ -789,14 +480,13 @@ mod tests {
             cluster_id: "c2".into(),
             primary_name: "photo2.jpg".into(),
             file_size: 600,
-            hash: None,
             is_group_selected: false,
             occurrences: vec![occ2_a, occ2_b],
         };
 
         let clusters = vec![cluster1, cluster2];
         let toggled = PathBuf::from("C:\\Sync\\photo1.jpg");
-        let sugg = DuplicateEngine::find_manual_folder_suggestion(&clusters, &toggled, true)
+        let sugg = crate::duplicate_suggestion::find_manual_folder_suggestion(&clusters, &toggled, true)
             .expect("Must find manual folder pattern suggestion");
         assert_eq!(sugg.folder_path, PathBuf::from("C:\\Sync"));
         assert_eq!(sugg.candidate_paths, vec![PathBuf::from("C:\\Sync\\photo2.jpg")]);

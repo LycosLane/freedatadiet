@@ -115,7 +115,7 @@ impl FreeDataDietApp {
             } else if ctrl && shift && d_pressed {
                 if let Some(sugg) = &self.active_suggestion {
                     let candidate_paths = sugg.candidate_paths.clone();
-                    let sel_val = sugg.action == crate::duplicate::SuggestionAction::Select;
+                    let sel_val = sugg.action == crate::duplicate_suggestion::SuggestionAction::Select;
                     for cluster in &mut self.duplicate_clusters {
                         for occ in &mut cluster.occurrences {
                             if candidate_paths.contains(&occ.path) && !occ.is_system_protected {

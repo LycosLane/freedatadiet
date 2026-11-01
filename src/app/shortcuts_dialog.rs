@@ -147,15 +147,12 @@ impl FreeDataDietApp {
                 });
             });
 
-        if let Some(resp) = win_resp {
-            if !self.shortcuts_just_opened && ui.input(|i| i.pointer.any_pressed()) {
-                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    if !resp.response.rect.contains(pos) {
+        if let Some(resp) = win_resp
+            && !self.shortcuts_just_opened && ui.input(|i| i.pointer.any_pressed())
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                    && !resp.response.rect.contains(pos) {
                         close_shortcuts = true;
                     }
-                }
-            }
-        }
 
         if self.shortcuts_just_opened {
             self.shortcuts_just_opened = false;

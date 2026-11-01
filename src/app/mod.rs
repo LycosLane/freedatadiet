@@ -19,7 +19,8 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Panel};
 
 use crate::config::{AppConfig, AppTheme, QuickSearchMode};
-use crate::duplicate::{DuplicateCluster, DuplicateEngine, DuplicateSuggestion};
+use crate::duplicate::{DuplicateCluster, DuplicateEngine};
+use crate::duplicate_suggestion::DuplicateSuggestion;
 use crate::locations::LocationManager;
 use crate::model::{DriveInfo, FileEntry};
 use crate::platform;
@@ -422,12 +423,11 @@ impl FreeDataDietApp {
                     let mut oldest_idx = 0;
                     let mut oldest_time = cluster.occurrences[0].modified;
                     for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
-                        if let (Some(cur), Some(oldest)) = (occ.modified, oldest_time) {
-                            if cur < oldest {
+                        if let (Some(cur), Some(oldest)) = (occ.modified, oldest_time)
+                            && cur < oldest {
                                 oldest_time = Some(cur);
                                 oldest_idx = i;
                             }
-                        }
                     }
                     for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
                         occ.is_selected = (i != oldest_idx) && !occ.is_system_protected;
@@ -437,12 +437,11 @@ impl FreeDataDietApp {
                     let mut newest_idx = 0;
                     let mut newest_time = cluster.occurrences[0].modified;
                     for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
-                        if let (Some(cur), Some(newest)) = (occ.modified, newest_time) {
-                            if cur > newest {
+                        if let (Some(cur), Some(newest)) = (occ.modified, newest_time)
+                            && cur > newest {
                                 newest_time = Some(cur);
                                 newest_idx = i;
                             }
-                        }
                     }
                     for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
                         occ.is_selected = (i != newest_idx) && !occ.is_system_protected;
@@ -542,7 +541,7 @@ impl FreeDataDietApp {
             .cloned()
             .collect();
 
-        self.active_suggestion = DuplicateEngine::find_manual_folder_suggestion(
+        self.active_suggestion = crate::duplicate_suggestion::find_manual_folder_suggestion(
             &active_clusters,
             toggled_path,
             is_now_selected,
@@ -645,8 +644,8 @@ impl FreeDataDietApp {
             self.compute_duplicates();
         }
 
-        if self.is_finding_duplicates {
-            if let Some(rx) = &self.duplicate_receiver {
+        if self.is_finding_duplicates
+            && let Some(rx) = &self.duplicate_receiver {
                 loop {
                     match rx.try_recv() {
                         Ok(msg) => {
@@ -682,7 +681,6 @@ impl FreeDataDietApp {
                     }
                 }
             }
-        }
     }
 }
 
@@ -729,14 +727,12 @@ impl eframe::App for FreeDataDietApp {
             && self.delete_modal == DeleteConfirmState::None
             && self.active_context_menu.is_none()
             && !self.show_shortcuts_modal
-        {
-            if self.config.show_sidebar {
+            && self.config.show_sidebar {
                 self.panel_focus = match self.panel_focus {
                     ActivePanelFocus::MainView => ActivePanelFocus::SettingsPanel,
                     ActivePanelFocus::SettingsPanel => ActivePanelFocus::MainView,
                 };
             }
-        }
 
         // Global Shortcuts (F-keys & Ctrl shortcuts) - active when enabled per-key
         let f11_pressed = ui.input(|i| i.key_pressed(egui::Key::F11));
