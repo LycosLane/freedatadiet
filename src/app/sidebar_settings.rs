@@ -564,11 +564,19 @@ impl FreeDataDietApp {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("UI Scale:");
-            let mut scale = self.config.ui_scale;
-            if ui.add(egui::Slider::new(&mut scale, 0.8..=1.5).step_by(0.05)).changed() {
-                self.config.ui_scale = scale;
-                ui.ctx().set_pixels_per_point(scale);
-                self.save_config();
+            // Apply the scale only on release: rescaling mid-drag moves the slider under the cursor.
+            let draft_id = ui.id().with("ui_scale_draft");
+            let mut scale = ui.data(|d| d.get_temp::<f32>(draft_id)).unwrap_or(self.config.ui_scale);
+            let response = ui.add(egui::Slider::new(&mut scale, 0.8..=1.5).step_by(0.05));
+            if response.is_pointer_button_down_on() {
+                ui.data_mut(|d| d.insert_temp(draft_id, scale));
+            } else {
+                ui.data_mut(|d| d.remove_temp::<f32>(draft_id));
+                if (scale - self.config.ui_scale).abs() > f32::EPSILON {
+                    self.config.ui_scale = scale;
+                    ui.ctx().set_pixels_per_point(scale);
+                    self.save_config();
+                }
             }
             if ui.small_button("100%").clicked() {
                 self.config.ui_scale = 1.0;
