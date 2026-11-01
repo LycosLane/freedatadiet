@@ -33,3 +33,7 @@ Thumbs.db
 *.swo
 *~
 
+# Local documentation & private guides (never pushed)
+.local_docs/
+
+
