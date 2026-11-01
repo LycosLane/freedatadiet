@@ -7,86 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rayon::prelude::*;
+
 use crate::model::FileEntry;
 use crate::platform::{get_allocated_size_from_meta, get_file_id_and_links, FileId};
 
-#[derive(Clone, Debug, Default)]
-pub struct CompiledExcludes {
-    exact_names: HashSet<String>,
-    prefix_names: Vec<String>,
-    suffix_names: Vec<String>,
-    contains_names: Vec<String>,
-    path_prefixes: Vec<String>,
-}
-
-impl CompiledExcludes {
-    pub fn compile(raw_patterns: &[String]) -> Self {
-        let mut exact_names = HashSet::new();
-        let mut prefix_names = Vec::new();
-        let mut suffix_names = Vec::new();
-        let mut contains_names = Vec::new();
-        let mut path_prefixes = Vec::new();
-
-        for raw in raw_patterns {
-            let pat = raw.trim().to_lowercase();
-            if pat.is_empty() {
-                continue;
-            }
-
-            if pat.contains('/') || pat.contains('\\') {
-                let norm = pat.replace('\\', "/").trim_end_matches('/').to_string();
-                path_prefixes.push(norm);
-            } else if pat.starts_with('*') && pat.ends_with('*') && pat.len() > 2 {
-                contains_names.push(pat[1..pat.len() - 1].to_string());
-            } else if let Some(suffix) = pat.strip_prefix('*') {
-                suffix_names.push(suffix.to_string());
-            } else if let Some(prefix) = pat.strip_suffix('*') {
-                prefix_names.push(prefix.to_string());
-            } else {
-                exact_names.insert(pat);
-            }
-        }
-
-        Self {
-            exact_names,
-            prefix_names,
-            suffix_names,
-            contains_names,
-            path_prefixes,
-        }
-    }
-
-    #[inline]
-    pub fn matches(&self, name: &str, path: &Path) -> bool {
-        if crate::model::is_dos_device_name(name) {
-            return true;
-        }
-
-        if self.exact_names.iter().any(|ex| ex.eq_ignore_ascii_case(name)) {
-            return true;
-        }
-
-        let lower_name = name.to_ascii_lowercase();
-        if self.prefix_names.iter().any(|p| lower_name.starts_with(p))
-            || self.suffix_names.iter().any(|s| lower_name.ends_with(s))
-            || self.contains_names.iter().any(|c| lower_name.contains(c))
-        {
-            return true;
-        }
-
-        if !self.path_prefixes.is_empty() {
-            let path_str = path.to_string_lossy();
-            let norm_path = path_str.replace('\\', "/").to_ascii_lowercase();
-            for prefix in &self.path_prefixes {
-                if norm_path == *prefix || norm_path.starts_with(&format!("{}/", prefix)) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-}
+pub use crate::scanner_excludes::CompiledExcludes;
 
 #[derive(Debug, Clone)]
 pub struct ScanSummary {
@@ -230,43 +156,33 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
         // Send all discovered entries immediately so UI shows folders without delay!
         let _ = tx.send(ScanMessage::InitialEntries(initial_entries));
 
-        let num_cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-
         let child_paths = Arc::new(child_paths);
         let (worker_tx, worker_rx) = channel();
 
-        let chunk_size = child_paths.len().div_ceil(num_cpus).max(1);
-        let mut handles = Vec::new();
+        let cancel_w = Arc::clone(&cancel_clone);
+        let total_counter_w = Arc::clone(&total_counter);
+        let excludes_w = Arc::clone(&compiled_excludes);
+        let seen_hardlinks_w = Arc::clone(&seen_hardlinks);
+        let child_paths_w = Arc::clone(&child_paths);
+        let worker_tx_w = worker_tx.clone();
 
-        for chunk_idx in 0..num_cpus {
-            let child_paths = Arc::clone(&child_paths);
-            let cancel = Arc::clone(&cancel_clone);
-            let total_counter = Arc::clone(&total_counter);
-            let excludes = Arc::clone(&compiled_excludes);
-            let seen_hardlinks = Arc::clone(&seen_hardlinks);
-            let worker_tx = worker_tx.clone();
-
-            let start = chunk_idx * chunk_size;
-            let end = (start + chunk_size).min(child_paths.len());
-
-            if start >= child_paths.len() {
-                break;
-            }
-
-            let handle = thread::spawn(move || {
-                for i in start..end {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let (path, name) = &child_paths[i];
-                    let entry = process_single_entry(path, name, &cancel, &total_counter, &excludes, &seen_hardlinks);
-                    let _ = worker_tx.send(entry);
+        let worker_handle = thread::spawn(move || {
+            (0..child_paths_w.len()).into_par_iter().for_each(|i| {
+                if cancel_w.load(Ordering::Relaxed) {
+                    return;
                 }
+                let (path, name) = &child_paths_w[i];
+                let entry = process_single_entry(
+                    path,
+                    name,
+                    &cancel_w,
+                    &total_counter_w,
+                    &excludes_w,
+                    &seen_hardlinks_w,
+                );
+                let _ = worker_tx_w.send(entry);
             });
-            handles.push(handle);
-        }
+        });
         drop(worker_tx);
 
         let mut last_progress_report = Instant::now();
@@ -291,9 +207,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
             }
         }
 
-        for h in handles {
-            let _ = h.join();
-        }
+        let _ = worker_handle.join();
 
         if !cancel_clone.load(Ordering::Relaxed) {
             let _ = tx.send(ScanMessage::Completed(ScanSummary {
@@ -404,101 +318,247 @@ fn process_single_entry(
             );
         }
 
-        let mut dir_size = 0u64;
-        let mut dir_allocated = 0u64;
-        let mut count = 0usize;
-        let mut access_denied = false;
-        let mut partially_locked = false;
-
-        let mut visited_dirs = HashSet::new();
+        let visited_dirs = Arc::new(Mutex::new(HashSet::new()));
         if let (Some(root_fid), _) = get_file_id_and_links(path, &metadata) {
-            visited_dirs.insert(root_fid);
+            visited_dirs.lock().unwrap_or_else(|p| p.into_inner()).insert(root_fid);
         }
 
-        let mut stack = vec![path.to_path_buf()];
-
-        while let Some(current_dir) = stack.pop() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-
-            match fs::read_dir(&current_dir) {
-                Ok(entries) => {
-                    for entry_res in entries {
-                        if cancel.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        if let Ok(e) = entry_res {
-                            total_counter.fetch_add(1, Ordering::Relaxed);
-                            let sub_path = e.path();
-                            let sub_name = e.file_name().to_string_lossy().to_string();
-
-                            // Check excludes on subfolders
-                            if excludes.matches(&sub_name, &sub_path) {
-                                continue;
-                            }
-
-                            if let Ok(meta) = fs::symlink_metadata(&sub_path) {
-                                count += 1;
-                                if meta.is_dir() {
-                                    // Never follow links (symlinks, junctions) while walking
-                                    if meta.file_type().is_symlink() {
-                                        continue;
-                                    }
-                                    // Track directory inode to prevent infinite loops (Unix bind mounts or recursive mounts)
-                                    let (dir_fid, _) = get_file_id_and_links(&sub_path, &meta);
-                                    if let Some(dfid) = dir_fid {
-                                        if !visited_dirs.insert(dfid) {
-                                            continue;
-                                        }
-                                    }
-                                    stack.push(sub_path);
-                                } else {
-                                    let fsize = meta.len();
-                                    let (file_fid, links) = get_file_id_and_links(&sub_path, &meta);
-                                    let is_dup = if links > 1 {
-                                        if let Some(ffid) = file_fid {
-                                            !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(ffid)
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    };
-
-                                    if !is_dup {
-                                        dir_size += fsize;
-                                        dir_allocated += get_allocated_size_from_meta(&sub_path, Some(&meta), fsize);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                    if current_dir == path {
-                        access_denied = true;
-                    } else {
-                        partially_locked = true;
-                    }
-                }
-                Err(_) => {}
-            }
-        }
+        let stats = walk_dir_parallel(
+            path,
+            cancel,
+            total_counter,
+            excludes,
+            seen_hardlinks,
+            &visited_dirs,
+            0,
+        );
 
         FileEntry::new(
             name.to_string(),
             path.to_path_buf(),
             true,
-            dir_size,
-            dir_allocated,
+            stats.size,
+            stats.allocated,
             modified,
-            count,
-            access_denied,
-            partially_locked,
+            stats.count,
+            stats.access_denied,
+            stats.partially_locked,
         )
     }
+}
+
+#[derive(Default)]
+struct DirScanStats {
+    size: u64,
+    allocated: u64,
+    count: usize,
+    access_denied: bool,
+    partially_locked: bool,
+}
+
+fn walk_dir_parallel(
+    dir_path: &Path,
+    cancel: &Arc<AtomicBool>,
+    total_counter: &Arc<AtomicUsize>,
+    excludes: &CompiledExcludes,
+    seen_hardlinks: &Arc<Mutex<HashSet<FileId>>>,
+    visited_dirs: &Arc<Mutex<HashSet<FileId>>>,
+    depth: usize,
+) -> DirScanStats {
+    if cancel.load(Ordering::Relaxed) {
+        return DirScanStats::default();
+    }
+
+    let entries = match fs::read_dir(dir_path) {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return DirScanStats {
+                size: 0,
+                allocated: 0,
+                count: 0,
+                access_denied: depth == 0,
+                partially_locked: depth > 0,
+            };
+        }
+        Err(_) => return DirScanStats::default(),
+    };
+
+    let mut local_stats = DirScanStats::default();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+
+    for entry_res in entries {
+        if cancel.load(Ordering::Relaxed) {
+            return local_stats;
+        }
+
+        if let Ok(e) = entry_res {
+            total_counter.fetch_add(1, Ordering::Relaxed);
+            let sub_path = e.path();
+            let sub_name = e.file_name().to_string_lossy().to_string();
+
+            if excludes.matches(&sub_name, &sub_path) {
+                continue;
+            }
+
+            if let Ok(meta) = fs::symlink_metadata(&sub_path) {
+                local_stats.count += 1;
+                if is_dir_entry(&sub_path, &meta) {
+                    if meta.file_type().is_symlink() {
+                        continue;
+                    }
+                    let (dir_fid, _) = get_file_id_and_links(&sub_path, &meta);
+                    if let Some(dfid) = dir_fid {
+                        let mut v = visited_dirs.lock().unwrap_or_else(|p| p.into_inner());
+                        if !v.insert(dfid) {
+                            continue;
+                        }
+                    }
+                    subdirs.push(sub_path);
+                } else {
+                    let fsize = meta.len();
+                    let (file_fid, links) = get_file_id_and_links(&sub_path, &meta);
+                    let is_dup = if links > 1 {
+                        if let Some(ffid) = file_fid {
+                            !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(ffid)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !is_dup {
+                        local_stats.size += fsize;
+                        local_stats.allocated += get_allocated_size_from_meta(&sub_path, Some(&meta), fsize);
+                    }
+                }
+            }
+        }
+    }
+
+    if subdirs.is_empty() {
+        return local_stats;
+    }
+
+    // Parallelize with Rayon if at top levels and multiple subdirectories exist
+    if depth < 3 && subdirs.len() > 1 {
+        let child_stats: DirScanStats = subdirs
+            .into_par_iter()
+            .map(|sub| {
+                walk_dir_parallel(
+                    &sub,
+                    cancel,
+                    total_counter,
+                    excludes,
+                    seen_hardlinks,
+                    visited_dirs,
+                    depth + 1,
+                )
+            })
+            .reduce(DirScanStats::default, |mut a, b| {
+                a.size += b.size;
+                a.allocated += b.allocated;
+                a.count += b.count;
+                a.partially_locked |= b.partially_locked || b.access_denied;
+                a
+            });
+
+        local_stats.size += child_stats.size;
+        local_stats.allocated += child_stats.allocated;
+        local_stats.count += child_stats.count;
+        local_stats.partially_locked |= child_stats.partially_locked || child_stats.access_denied;
+    } else {
+        for sub in subdirs {
+            let s = walk_dir_sequential(&sub, cancel, total_counter, excludes, seen_hardlinks, visited_dirs);
+            local_stats.size += s.size;
+            local_stats.allocated += s.allocated;
+            local_stats.count += s.count;
+            local_stats.partially_locked |= s.partially_locked || s.access_denied;
+        }
+    }
+
+    local_stats
+}
+
+fn walk_dir_sequential(
+    root: &Path,
+    cancel: &Arc<AtomicBool>,
+    total_counter: &Arc<AtomicUsize>,
+    excludes: &CompiledExcludes,
+    seen_hardlinks: &Arc<Mutex<HashSet<FileId>>>,
+    visited_dirs: &Arc<Mutex<HashSet<FileId>>>,
+) -> DirScanStats {
+    let mut stats = DirScanStats::default();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(current_dir) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
+        match fs::read_dir(&current_dir) {
+            Ok(entries) => {
+                for entry_res in entries {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if let Ok(e) = entry_res {
+                        total_counter.fetch_add(1, Ordering::Relaxed);
+                        let sub_path = e.path();
+                        let sub_name = e.file_name().to_string_lossy().to_string();
+
+                        if excludes.matches(&sub_name, &sub_path) {
+                            continue;
+                        }
+
+                        if let Ok(meta) = fs::symlink_metadata(&sub_path) {
+                            stats.count += 1;
+                            if is_dir_entry(&sub_path, &meta) {
+                                if meta.file_type().is_symlink() {
+                                    continue;
+                                }
+                                let (dir_fid, _) = get_file_id_and_links(&sub_path, &meta);
+                                if let Some(dfid) = dir_fid {
+                                    let mut v = visited_dirs.lock().unwrap_or_else(|p| p.into_inner());
+                                    if !v.insert(dfid) {
+                                        continue;
+                                    }
+                                }
+                                stack.push(sub_path);
+                            } else {
+                                let fsize = meta.len();
+                                let (file_fid, links) = get_file_id_and_links(&sub_path, &meta);
+                                let is_dup = if links > 1 {
+                                    if let Some(ffid) = file_fid {
+                                        !seen_hardlinks.lock().unwrap_or_else(|p| p.into_inner()).insert(ffid)
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                                if !is_dup {
+                                    stats.size += fsize;
+                                    stats.allocated += get_allocated_size_from_meta(&sub_path, Some(&meta), fsize);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                if current_dir == root {
+                    stats.access_denied = true;
+                } else {
+                    stats.partially_locked = true;
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    stats
 }
 
 struct DirFrame {
@@ -750,30 +810,5 @@ fn scan_flattened(
             total_files,
             duration: start_time.elapsed(),
         }));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_matches_exclude_path_and_wildcards() {
-        let raw_excludes = vec![
-            "*cache*".to_string(),
-            "target".to_string(),
-            "C:/Users/lukas/Backups".to_string(),
-        ];
-        let excludes = CompiledExcludes::compile(&raw_excludes);
-
-        // Name wildcard
-        assert!(excludes.matches("thumb_cache_dir", Path::new("C:/Data/thumb_cache_dir")));
-        assert!(excludes.matches("target", Path::new("C:/Project/target")));
-        assert!(!excludes.matches("src", Path::new("C:/Project/src")));
-
-        // Path exclusion prefix
-        assert!(excludes.matches("photos", Path::new("C:/Users/lukas/Backups/photos")));
-        assert!(excludes.matches("Backups", Path::new("C:\\Users\\lukas\\Backups")));
-        assert!(!excludes.matches("photos", Path::new("C:/Users/lukas/Documents/photos")));
     }
 }

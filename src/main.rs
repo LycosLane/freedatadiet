@@ -8,6 +8,7 @@ pub mod locations;
 pub mod model;
 pub mod platform;
 pub mod scanner;
+pub mod scanner_excludes;
 pub mod updater;
 
 use app::FreeDataDietApp;

@@ -133,143 +133,131 @@ impl FreeDataDietApp {
             *trigger_rescan = true;
         }
 
-        ui.add_space(3.0);
-        let pill_sugg = setting_pill(
-            ui,
-            self.config.enable_duplicate_suggestions,
-            false,
-            "Duplicate Recommendations",
-            None,
-            false,
-            true,
-            is_dark,
-        ).on_hover_text("Enable smart auto-selection rules (Keep Oldest/Newest) and folder-pair pattern matching");
-        if pill_sugg.clicked() {
-            self.config.enable_duplicate_suggestions = !self.config.enable_duplicate_suggestions;
-            self.save_config();
-            if self.config.enable_duplicate_suggestions {
-                self.apply_category_duplicate_rules();
-            } else {
-                self.active_suggestion = None;
-            }
-        }
-
-        // Dedicated Visual Category Recommendations Card
-        if self.config.enable_duplicate_suggestions {
+        if self.config.show_duplicates_only {
             ui.add_space(3.0);
-            egui::Frame::new()
-                .fill(if is_dark { Color32::from_gray(30) } else { Color32::from_gray(240) })
-                .stroke(Stroke::new(1.0, if is_dark { Color32::from_gray(55) } else { Color32::from_gray(210) }))
-                .corner_radius(4.0)
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Category Auto-Rules").size(12.5).strong().color(Color32::from_rgb(255, 140, 0)));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Reset Rules").clicked() {
-                                self.config.category_duplicate_rules = CategoryDuplicateRules::default();
-                                self.save_config();
-                                if self.config.show_duplicates_only {
-                                    self.apply_category_duplicate_rules();
-                                }
-                            }
-                        });
-                    });
-                    ui.label(RichText::new("Auto-select redundant copies for deletion based on timestamps:").weak().small());
-                    ui.add_space(3.0);
+            let pill_sugg = setting_pill(
+                ui,
+                self.config.enable_duplicate_suggestions,
+                false,
+                "Duplicate Recommendations",
+                None,
+                false,
+                true,
+                is_dark,
+            ).on_hover_text("Enable smart auto-selection rules (Keep Oldest/Newest) and folder-pair pattern matching");
+            if pill_sugg.clicked() {
+                self.config.enable_duplicate_suggestions = !self.config.enable_duplicate_suggestions;
+                self.save_config();
+                if self.config.enable_duplicate_suggestions {
+                    self.apply_category_duplicate_rules();
+                } else {
+                    self.active_suggestion = None;
+                }
+            }
 
-                    let cat_rules = [
-                        ("Images", &mut self.config.category_duplicate_rules.images),
-                        ("Videos", &mut self.config.category_duplicate_rules.videos),
-                        ("Audio", &mut self.config.category_duplicate_rules.audio),
-                        ("Documents", &mut self.config.category_duplicate_rules.documents),
-                        ("Archives", &mut self.config.category_duplicate_rules.archives),
-                    ];
-
-                    let mut rules_changed = false;
-                    for (cat_name, pref_ref) in cat_rules {
+            // Dedicated Visual Category Recommendations Card
+            if self.config.enable_duplicate_suggestions {
+                ui.add_space(3.0);
+                egui::Frame::new()
+                    .fill(if is_dark { Color32::from_gray(30) } else { Color32::from_gray(240) })
+                    .stroke(Stroke::new(1.0, if is_dark { Color32::from_gray(55) } else { Color32::from_gray(210) }))
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(cat_name).size(12.0).strong());
+                            ui.label(RichText::new("Category Auto-Rules").size(12.5).strong().color(Color32::from_rgb(225, 120, 20)));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let pref = *pref_ref;
-                                let (bg, text_col) = match pref {
-                                    DuplicateRulePreference::Off => (
-                                        if is_dark { Color32::from_gray(45) } else { Color32::from_gray(225) },
-                                        if is_dark { Color32::from_gray(180) } else { Color32::from_gray(90) },
-                                    ),
-                                    DuplicateRulePreference::KeepOldest => (
-                                        Color32::from_rgb(235, 115, 15),
-                                        Color32::WHITE,
-                                    ),
-                                    DuplicateRulePreference::KeepNewest => (
-                                        Color32::from_rgb(30, 140, 220),
-                                        Color32::WHITE,
-                                    ),
-                                    DuplicateRulePreference::KeepFirst => (
-                                        Color32::from_rgb(50, 160, 90),
-                                        Color32::WHITE,
-                                    ),
-                                };
-
-                                let btn = egui::Button::new(
-                                    RichText::new(format!("{} v", pref.label())).size(11.5).strong().color(text_col),
-                                )
-                                .fill(bg)
-                                .corner_radius(3.0);
-
-                                let tooltip = match pref {
-                                    DuplicateRulePreference::Off => "Disabled: No auto-selection for this category",
-                                    DuplicateRulePreference::KeepOldest => "Keep Oldest: Selects newer copies for deletion, preserving oldest timestamp",
-                                    DuplicateRulePreference::KeepNewest => "Keep Newest: Selects older copies for deletion, preserving latest timestamp",
-                                    DuplicateRulePreference::KeepFirst => "Keep First: Keeps first occurrence, selects all duplicate copies",
-                                };
-
-                                if ui.add(btn).on_hover_text(format!("{}\nClick to cycle preference", tooltip)).clicked() {
-                                    *pref_ref = pref.cycle();
-                                    rules_changed = true;
+                                if ui.small_button("Reset Rules").clicked() {
+                                    self.config.category_duplicate_rules = CategoryDuplicateRules::default();
+                                    self.save_config();
+                                    self.apply_category_duplicate_rules();
                                 }
                             });
                         });
-                    }
+                        ui.label(RichText::new("Auto-select redundant copies for deletion based on timestamps:").weak().small());
+                        ui.add_space(3.0);
 
-                    if rules_changed {
-                        self.save_config();
-                        if self.config.show_duplicates_only {
+                        let cat_rules = [
+                            ("Images", &mut self.config.category_duplicate_rules.images),
+                            ("Videos", &mut self.config.category_duplicate_rules.videos),
+                            ("Audio", &mut self.config.category_duplicate_rules.audio),
+                            ("Documents", &mut self.config.category_duplicate_rules.documents),
+                            ("Archives", &mut self.config.category_duplicate_rules.archives),
+                        ];
+
+                        let mut rules_changed = false;
+                        for (cat_name, pref_ref) in cat_rules {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(cat_name).size(12.0).strong());
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let pref = *pref_ref;
+                                    let (bg, text_col) = match pref {
+                                        DuplicateRulePreference::Off => (
+                                            if is_dark { Color32::from_gray(45) } else { Color32::from_gray(225) },
+                                            if is_dark { Color32::from_gray(170) } else { Color32::from_gray(100) },
+                                        ),
+                                        _ => (
+                                            Color32::from_rgb(225, 120, 20),
+                                            Color32::WHITE,
+                                        ),
+                                    };
+
+                                    let btn = egui::Button::new(
+                                        RichText::new(format!("{} v", pref.label())).size(11.5).strong().color(text_col),
+                                    )
+                                    .fill(bg)
+                                    .corner_radius(3.0);
+
+                                    let tooltip = match pref {
+                                        DuplicateRulePreference::Off => "Disabled: No auto-selection for this category",
+                                        DuplicateRulePreference::KeepOldest => "Keep Oldest: Selects newer copies for deletion, preserving oldest timestamp",
+                                        DuplicateRulePreference::KeepNewest => "Keep Newest: Selects older copies for deletion, preserving latest timestamp",
+                                        DuplicateRulePreference::KeepFirst => "Keep First: Keeps first occurrence, selects all duplicate copies",
+                                    };
+
+                                    if ui.add(btn).on_hover_text(format!("{}\nClick to cycle preference", tooltip)).clicked() {
+                                        *pref_ref = pref.cycle();
+                                        rules_changed = true;
+                                    }
+                                });
+                            });
+                        }
+
+                        if rules_changed {
+                            self.save_config();
                             self.apply_category_duplicate_rules();
                         }
-                    }
-                });
-        }
-
-        ui.add_space(4.0);
-        ui.label(RichText::new("Duplicate Matching Criteria:").weak().small());
-
-        let mut crit_changed = false;
-        let criteria_items = [
-            (2, "Match same file size", self.config.duplicate_criteria.match_size),
-            (3, "Match same file name", self.config.duplicate_criteria.match_name),
-            (4, "Match modification timestamp", self.config.duplicate_criteria.match_timestamp),
-            (5, "Match bit-exact SHA-256 hash", self.config.duplicate_criteria.verify_hash),
-        ];
-
-        for (idx, label, val) in criteria_items {
-            let is_f = is_panel_focused && self.settings_nav_idx == idx;
-            let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
-            if pill.clicked() || (is_f && key_activate) {
-                match idx {
-                    2 => self.config.duplicate_criteria.match_size = !val,
-                    3 => self.config.duplicate_criteria.match_name = !val,
-                    4 => self.config.duplicate_criteria.match_timestamp = !val,
-                    5 => self.config.duplicate_criteria.verify_hash = !val,
-                    _ => {}
-                }
-                crit_changed = true;
+                    });
             }
-        }
 
-        if crit_changed {
-            self.save_config();
-            if self.config.show_duplicates_only {
+            ui.add_space(4.0);
+            ui.label(RichText::new("Duplicate Matching Criteria:").weak().small());
+
+            let mut crit_changed = false;
+            let criteria_items = [
+                (2, "Match same file size", self.config.duplicate_criteria.match_size),
+                (3, "Match same file name", self.config.duplicate_criteria.match_name),
+                (4, "Match modification timestamp", self.config.duplicate_criteria.match_timestamp),
+                (5, "Match bit-exact SHA-256 hash", self.config.duplicate_criteria.verify_hash),
+            ];
+
+            for (idx, label, val) in criteria_items {
+                let is_f = is_panel_focused && self.settings_nav_idx == idx;
+                let pill = setting_pill(ui, val, is_f, label, None, false, false, is_dark);
+                if pill.clicked() || (is_f && key_activate) {
+                    match idx {
+                        2 => self.config.duplicate_criteria.match_size = !val,
+                        3 => self.config.duplicate_criteria.match_name = !val,
+                        4 => self.config.duplicate_criteria.match_timestamp = !val,
+                        5 => self.config.duplicate_criteria.verify_hash = !val,
+                        _ => {}
+                    }
+                    crit_changed = true;
+                }
+            }
+
+            if crit_changed {
+                self.save_config();
                 *recompute_dups = true;
             }
         }
@@ -437,6 +425,8 @@ impl FreeDataDietApp {
                     self.config.category_filters.show_documents = true;
                     self.config.category_filters.show_archives = true;
                     self.save_config();
+                    self.visible_indices_dirty = true;
+                    self.update_visible_indices();
                 }
             });
         });
@@ -469,6 +459,8 @@ impl FreeDataDietApp {
 
         if cat_changed {
             self.save_config();
+            self.visible_indices_dirty = true;
+            self.update_visible_indices();
         }
 
         ui.add_space(6.0);

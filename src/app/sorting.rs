@@ -191,6 +191,9 @@ impl FreeDataDietApp {
 
             a.name.chars().flat_map(char::to_lowercase).cmp(b.name.chars().flat_map(char::to_lowercase))
         });
+
+        self.visible_indices_dirty = true;
+        self.update_visible_indices();
     }
 
     pub(super) fn toggle_sort_column(&mut self, col: ColumnId) {
