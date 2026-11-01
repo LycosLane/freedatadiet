@@ -204,76 +204,51 @@ impl FreeDataDietApp {
     }
 
     pub(super) fn collect_excludes(&self) -> Vec<String> {
-        let mut list = Vec::new();
+        let mut list: Vec<String> = Vec::new();
+        let mut add = |item: &str| {
+            if !list.iter().any(|existing| existing.eq_ignore_ascii_case(item)) {
+                list.push(item.to_string());
+            }
+        };
 
-        // 1. Development & Repository Caches
         if self.ignore_dev_caches {
-            let dev_presets = [
+            [
                 ".git", ".svn", ".hg", "node_modules", "target", ".cargo",
                 ".venv", "venv", "__pycache__", ".gradle", ".m2",
-            ];
-            for item in dev_presets {
-                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
-                    list.push(item.to_string());
-                }
-            }
+            ]
+            .into_iter()
+            .for_each(&mut add);
         }
-
-        // 2. Application & Media Render Caches (generic patterns + media tools)
         if self.ignore_media_caches {
-            let media_presets = [
+            [
                 "*cache*", "*thumb*", ".gallery", "OptimizedMedia", "ProxyMedia",
                 "Media Cache Files", "Media Cache", "DerivedDataCache",
-            ];
-            for item in media_presets {
-                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
-                    list.push(item.to_string());
-                }
-            }
+            ]
+            .into_iter()
+            .for_each(&mut add);
         }
-
-        // 3. System & Temporary Files
         if self.ignore_temp_caches {
-            let temp_presets = [
+            [
                 "Temp", "CrashDumps", "Prefetch", "DeliveryOptimization",
                 "$RECYCLE.BIN", "System Volume Information", ".Trash-*",
                 "*.dmp", "*.tmp",
-            ];
-            for item in temp_presets {
-                if !list.iter().any(|existing: &String| existing.eq_ignore_ascii_case(item)) {
-                    list.push(item.to_string());
-                }
-            }
+            ]
+            .into_iter()
+            .for_each(&mut add);
         }
-
-        // 4. Custom Excludes from User Input
-        for item in self.custom_excludes.split(',') {
-            let trimmed = item.trim();
-            if !trimmed.is_empty() && !list.iter().any(|existing| existing.eq_ignore_ascii_case(trimmed)) {
-                list.push(trimmed.to_string());
-            }
+        for item in self.custom_excludes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            add(item);
         }
-
-        // 5. Explicit Excluded Patterns from Config
-        for p in &self.config.excluded_patterns {
-            if p.enabled && !list.iter().any(|existing| existing.eq_ignore_ascii_case(&p.pattern)) {
-                list.push(p.pattern.clone());
-            }
+        for p in self.config.excluded_patterns.iter().filter(|p| p.enabled) {
+            add(&p.pattern);
         }
-
-        // 6. Excluded Locations (Hide from Scan)
-        for loc in &self.config.excluded_locations {
-            if loc.enabled && loc.scope == crate::config::ExcludeScope::HideFromScan {
-                let path_str = loc.path.to_string_lossy().to_string();
-                if !list.iter().any(|existing| existing.eq_ignore_ascii_case(&path_str)) {
-                    list.push(path_str);
-                }
-            }
+        for loc in self.config.excluded_locations.iter().filter(|l| {
+            l.enabled && l.scope == crate::config::ExcludeScope::HideFromScan
+        }) {
+            add(&loc.path.to_string_lossy());
         }
-
         list
     }
-
     pub(super) fn trigger_scan(&mut self) {
         if let Some(scanner) = &self.scanner {
             scanner.cancel();
@@ -412,43 +387,7 @@ impl FreeDataDietApp {
                 continue;
             }
 
-            cluster.is_group_selected = false;
-            match pref {
-                crate::config::DuplicateRulePreference::KeepFirst => {
-                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                        occ.is_selected = i > 0 && !occ.is_system_protected;
-                    }
-                }
-                crate::config::DuplicateRulePreference::KeepOldest => {
-                    let mut oldest_idx = 0;
-                    let mut oldest_time = cluster.occurrences[0].modified;
-                    for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
-                        if let (Some(cur), Some(oldest)) = (occ.modified, oldest_time)
-                            && cur < oldest {
-                                oldest_time = Some(cur);
-                                oldest_idx = i;
-                            }
-                    }
-                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                        occ.is_selected = (i != oldest_idx) && !occ.is_system_protected;
-                    }
-                }
-                crate::config::DuplicateRulePreference::KeepNewest => {
-                    let mut newest_idx = 0;
-                    let mut newest_time = cluster.occurrences[0].modified;
-                    for (i, occ) in cluster.occurrences.iter().enumerate().skip(1) {
-                        if let (Some(cur), Some(newest)) = (occ.modified, newest_time)
-                            && cur > newest {
-                                newest_time = Some(cur);
-                                newest_idx = i;
-                            }
-                    }
-                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                        occ.is_selected = (i != newest_idx) && !occ.is_system_protected;
-                    }
-                }
-                crate::config::DuplicateRulePreference::Off => {}
-            }
+            cluster.keep_one(pref);
         }
         self.safety_warning = None;
         self.active_suggestion = None;

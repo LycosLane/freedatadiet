@@ -92,29 +92,21 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn new(
-        name: String,
-        path: PathBuf,
-        is_dir: bool,
-        size: u64,
-        allocated_size: u64,
-        modified: Option<SystemTime>,
-        item_count: usize,
-        is_access_denied: bool,
-        is_partially_locked: bool,
-    ) -> Self {
+    /// Creates an entry with zero size and default flags. Set measured values
+    /// with struct update syntax: `FileEntry { size, ..FileEntry::new(..) }`.
+    pub fn new(name: String, path: PathBuf, is_dir: bool) -> Self {
         let (is_system_protected, is_hidden, is_reparse_point) = detect_path_attributes(&path, &name);
         let category = FileCategory::from_path_and_dir(&path, is_dir);
         Self {
             name,
             path,
             is_dir,
-            size,
-            allocated_size,
-            modified,
-            item_count,
-            is_access_denied,
-            is_partially_locked,
+            size: 0,
+            allocated_size: 0,
+            modified: None,
+            item_count: usize::from(!is_dir),
+            is_access_denied: false,
+            is_partially_locked: false,
             is_system_protected,
             is_hidden,
             is_reparse_point,

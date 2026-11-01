@@ -133,17 +133,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
                     (0, 0, true)
                 };
 
-                let mut item = FileEntry::new(
-                    name.clone(),
-                    path.clone(),
-                    is_dir,
-                    size,
-                    allocated,
-                    modified,
-                    if is_dir { 0 } else { 1 },
-                    false,
-                    false,
-                );
+                let mut item = FileEntry { size, allocated_size: allocated, modified, ..FileEntry::new(name.clone(), path.clone(), is_dir) };
                 item.is_scanning = is_scanning;
                 initial_entries.push(item);
 
@@ -243,17 +233,7 @@ fn process_single_entry(
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => {
-            return FileEntry::new(
-                name.to_string(),
-                path.to_path_buf(),
-                path.is_dir(),
-                0,
-                0,
-                None,
-                0,
-                true,
-                false,
-            );
+            return FileEntry { is_access_denied: true, ..FileEntry::new(name.to_string(), path.to_path_buf(), path.is_dir()) };
         }
     };
 
@@ -274,48 +254,23 @@ fn process_single_entry(
         };
         let counted_size = if is_dup { 0 } else { size };
         let allocated = if is_dup { 0 } else { get_allocated_size_from_meta(path, Some(&metadata), size) };
-        FileEntry::new(
-            name.to_string(),
-            path.to_path_buf(),
-            false,
-            counted_size,
-            allocated,
-            modified,
-            1,
-            false,
-            false,
-        )
+        FileEntry { size: counted_size, allocated_size: allocated, modified, ..FileEntry::new(name.to_string(), path.to_path_buf(), false) }
     } else {
         // Junctions and symlinks are listed but never followed, so loops and double counting cannot happen
         if metadata.file_type().is_symlink() {
-            return FileEntry::new(
-                name.to_string(),
-                path.to_path_buf(),
-                true,
-                0,
-                0,
-                modified,
-                0,
-                false,
-                false,
-            );
+            return FileEntry { modified, ..FileEntry::new(name.to_string(), path.to_path_buf(), true) };
         }
 
         // If this directory itself is excluded, skip walking children
         if excludes.matches(name, path) {
             let size = metadata.len();
             let allocated = get_allocated_size_from_meta(path, Some(&metadata), size);
-            return FileEntry::new(
-                format!("{} (ignored)", name),
-                path.to_path_buf(),
-                true,
+            return FileEntry {
                 size,
-                allocated,
+                allocated_size: allocated,
                 modified,
-                0,
-                false,
-                false,
-            );
+                ..FileEntry::new(format!("{} (ignored)", name), path.to_path_buf(), true)
+            };
         }
 
         let visited_dirs = Arc::new(Mutex::new(HashSet::new()));
@@ -333,17 +288,7 @@ fn process_single_entry(
             0,
         );
 
-        FileEntry::new(
-            name.to_string(),
-            path.to_path_buf(),
-            true,
-            stats.size,
-            stats.allocated,
-            modified,
-            stats.count,
-            stats.access_denied,
-            stats.partially_locked,
-        )
+        FileEntry { size: stats.size, allocated_size: stats.allocated, modified, item_count: stats.count, is_access_denied: stats.access_denied, is_partially_locked: stats.partially_locked, ..FileEntry::new(name.to_string(), path.to_path_buf(), true) }
     }
 }
 
@@ -607,17 +552,7 @@ fn scan_flattened(
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| root_path.to_string_lossy().to_string());
-            let file_entry = FileEntry::new(
-                name,
-                root_path,
-                false,
-                size,
-                alloc,
-                root_meta.modified().ok(),
-                1,
-                false,
-                false,
-            );
+            let file_entry = FileEntry { size, allocated_size: alloc, modified: root_meta.modified().ok(), ..FileEntry::new(name, root_path, false) };
             batch.push(file_entry);
             continue;
         }
@@ -670,17 +605,7 @@ fn scan_flattened(
                                 false
                             };
 
-                            let file_entry = FileEntry::new(
-                                name,
-                                path,
-                                false,
-                                if is_dup { 0 } else { size },
-                                if is_dup { 0 } else { alloc },
-                                meta.modified().ok(),
-                                1,
-                                false,
-                                false,
-                            );
+                            let file_entry = FileEntry { size: if is_dup { 0 } else { size }, allocated_size: if is_dup { 0 } else { alloc }, modified: meta.modified().ok(), ..FileEntry::new(name, path, false) };
                             file_entries.push(file_entry);
 
                             if !is_dup {
@@ -755,17 +680,7 @@ fn scan_flattened(
                 total_counter.fetch_add(1, Ordering::Relaxed);
 
                 if !finished.is_root {
-                    let folder_entry = FileEntry::new(
-                        finished.name.clone(),
-                        finished.path.clone(),
-                        true,
-                        finished.size,
-                        finished.allocated,
-                        finished.modified,
-                        finished.items,
-                        false,
-                        false,
-                    );
+                    let folder_entry = FileEntry { size: finished.size, allocated_size: finished.allocated, modified: finished.modified, item_count: finished.items, ..FileEntry::new(finished.name.clone(), finished.path.clone(), true) };
                     batch.push(folder_entry);
 
                     if batch.len() >= 2048

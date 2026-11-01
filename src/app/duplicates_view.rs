@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, RichText, ScrollArea, Sense, Stroke};
 
+use crate::config::DuplicateRulePreference;
 use crate::model::{format_size, format_system_time};
 use crate::platform;
 
@@ -15,6 +16,18 @@ pub(crate) enum DuplicateRowItem {
 }
 
 impl FreeDataDietApp {
+    /// Opens the batch delete dialog for every currently deletable duplicate copy.
+    fn open_batch_delete_modal(&mut self, focus: DeleteModalFocus) {
+        let mut paths = Vec::new();
+        let mut total_size = 0u64;
+        for cluster in &self.duplicate_clusters {
+            let cluster_paths = cluster.deletable_paths();
+            total_size += cluster_paths.len() as u64 * cluster.file_size;
+            paths.extend(cluster_paths);
+        }
+        self.delete_modal = DeleteConfirmState::Batch { paths, total_size, has_system: false };
+        self.modal_focus = focus;
+    }
     pub(super) fn render_duplicates_view(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let total_clusters = self.duplicate_clusters.len();
 
@@ -109,10 +122,7 @@ impl FreeDataDietApp {
                 .clicked()
             {
                 for cluster in &mut self.duplicate_clusters {
-                    cluster.is_group_selected = false;
-                    for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                        occ.is_selected = i > 0 && !occ.is_system_protected;
-                    }
+                    cluster.keep_one(DuplicateRulePreference::KeepFirst);
                 }
                 self.safety_warning = None;
                 self.active_suggestion = None;
@@ -151,21 +161,7 @@ impl FreeDataDietApp {
                     }),
                 );
                 if ui.add_enabled(has_eligible, perm_btn).clicked() {
-                    let mut paths = Vec::new();
-                    let mut total_size = 0u64;
-                    for cluster in &self.duplicate_clusters {
-                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
-                            let p = cluster.deletable_paths();
-                            total_size += p.len() as u64 * cluster.file_size;
-                            paths.extend(p);
-                        }
-                    }
-                    self.delete_modal = DeleteConfirmState::Batch {
-                        paths,
-                        total_size,
-                        has_system: false,
-                    };
-                    self.modal_focus = DeleteModalFocus::Permanent;
+                    self.open_batch_delete_modal(DeleteModalFocus::Permanent);
                 }
 
                 let trash_btn = egui::Button::new(
@@ -176,21 +172,7 @@ impl FreeDataDietApp {
                     }),
                 );
                 if ui.add_enabled(has_eligible, trash_btn).clicked() {
-                    let mut paths = Vec::new();
-                    let mut total_size = 0u64;
-                    for cluster in &self.duplicate_clusters {
-                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
-                            let p = cluster.deletable_paths();
-                            total_size += p.len() as u64 * cluster.file_size;
-                            paths.extend(p);
-                        }
-                    }
-                    self.delete_modal = DeleteConfirmState::Batch {
-                        paths,
-                        total_size,
-                        has_system: false,
-                    };
-                    self.modal_focus = DeleteModalFocus::Trash;
+                    self.open_batch_delete_modal(DeleteModalFocus::Trash);
                 }
             });
         });
@@ -461,25 +443,7 @@ impl FreeDataDietApp {
                     self.config.shortcuts.del_trash
                 };
                 if can_delete {
-                    let mut paths = Vec::new();
-                    let mut total_size = 0u64;
-                    for cluster in &self.duplicate_clusters {
-                        if !cluster.are_all_copies_selected() || cluster.is_group_selected {
-                            let p = cluster.deletable_paths();
-                            total_size += p.len() as u64 * cluster.file_size;
-                            paths.extend(p);
-                        }
-                    }
-                    self.delete_modal = DeleteConfirmState::Batch {
-                        paths,
-                        total_size,
-                        has_system: false,
-                    };
-                    self.modal_focus = if shift {
-                        DeleteModalFocus::Permanent
-                    } else {
-                        DeleteModalFocus::Trash
-                    };
+                    self.open_batch_delete_modal(if shift { DeleteModalFocus::Permanent } else { DeleteModalFocus::Trash });
                 }
             }
         }
@@ -572,10 +536,7 @@ impl FreeDataDietApp {
                                             .on_hover_text("Selects all copies for deletion except the first occurrence")
                                             .clicked()
                                         {
-                                            cluster.is_group_selected = false;
-                                            for (i, occ) in cluster.occurrences.iter_mut().enumerate() {
-                                                occ.is_selected = i > 0 && !occ.is_system_protected;
-                                            }
+                                            cluster.keep_one(DuplicateRulePreference::KeepFirst);
                                             stats_dirty = true;
             self.duplicate_flat_rows_dirty = true;
                                         }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 
-use crate::config::DuplicateCriteriaConfig;
+use crate::config::{DuplicateCriteriaConfig, DuplicateRulePreference};
 use crate::duplicate_hashing::{
     hash_full, hash_prefix, hash_suffix, refine, Group, Hash, ScanContext, PREFIX_HASH_LEN,
     SUFFIX_HASH_LEN,
@@ -99,6 +99,31 @@ impl DuplicateCluster {
         (self.deletable_count() as u64).saturating_mul(self.file_size)
     }
 
+    /// Selects every copy except one keeper chosen by `pref` (first, oldest or
+    /// newest by modification time). System-protected copies are never selected.
+    /// Does nothing for `Off`.
+    pub fn keep_one(&mut self, pref: DuplicateRulePreference) {
+        if pref == DuplicateRulePreference::Off || self.occurrences.is_empty() {
+            return;
+        }
+        let mut keep = 0;
+        for (i, occ) in self.occurrences.iter().enumerate().skip(1) {
+            if let (Some(cur), Some(best)) = (occ.modified, self.occurrences[keep].modified) {
+                let better = match pref {
+                    DuplicateRulePreference::KeepOldest => cur < best,
+                    DuplicateRulePreference::KeepNewest => cur > best,
+                    _ => false,
+                };
+                if better {
+                    keep = i;
+                }
+            }
+        }
+        self.is_group_selected = false;
+        for (i, occ) in self.occurrences.iter_mut().enumerate() {
+            occ.is_selected = i != keep && !occ.is_system_protected;
+        }
+    }
     /// Toggles the group-level checkbox.
     /// When checked, automatically selects all individual copies for purge.
     /// When unchecked, deselects all copies.
@@ -371,9 +396,9 @@ mod tests {
         let mut f3 = File::create(&file3).unwrap();
         f3.write_all(&data).unwrap();
 
-        let e1 = FileEntry::new("orig.bin".into(), file1.clone(), false, 8192, 8192, None, 1, false, false);
-        let e2 = FileEntry::new("copy.bin".into(), file2.clone(), false, 8192, 8192, None, 1, false, false);
-        let e3 = FileEntry::new("diff.bin".into(), file3.clone(), false, 8192, 8192, None, 1, false, false);
+        let e1 = FileEntry { size: 8192, allocated_size: 8192, modified: None, item_count: 1, is_access_denied: false, is_partially_locked: false, ..FileEntry::new("orig.bin".into(), file1.clone(), false) };
+        let e2 = FileEntry { size: 8192, allocated_size: 8192, modified: None, item_count: 1, is_access_denied: false, is_partially_locked: false, ..FileEntry::new("copy.bin".into(), file2.clone(), false) };
+        let e3 = FileEntry { size: 8192, allocated_size: 8192, modified: None, item_count: 1, is_access_denied: false, is_partially_locked: false, ..FileEntry::new("diff.bin".into(), file3.clone(), false) };
 
         let entries = vec![e1, e2, e3];
         let cancel = Arc::new(AtomicBool::new(false));
@@ -410,7 +435,7 @@ mod tests {
             data[size / 2] = middle;
             let path = dir.join(name);
             File::create(&path).unwrap().write_all(&data).unwrap();
-            entries.push(FileEntry::new(name.into(), path, false, size as u64, size as u64, None, 1, false, false));
+            entries.push(FileEntry { size: size as u64, allocated_size: size as u64, modified: None, item_count: 1, is_access_denied: false, is_partially_locked: false, ..FileEntry::new(name.into(), path, false) });
         }
         let criteria = DuplicateCriteriaConfig {
             match_size: true,
