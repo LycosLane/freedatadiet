@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use eframe::egui::{self, Color32, RichText, ScrollArea};
 
+use crate::config::{ExcludeScope, ExcludedLocation};
 use crate::locations::LocationManager;
 use crate::model::format_size;
 use crate::platform;
@@ -162,6 +163,40 @@ fn delete_path_permanently(path: &Path) -> std::io::Result<()> {
 }
 
 impl FreeDataDietApp {
+    /// The folder a context menu entry refers to (the entry itself for folders, its parent for files).
+    fn context_target_folder(menu: &ActiveContextMenu) -> PathBuf {
+        if menu.is_dir {
+            menu.path.clone()
+        } else {
+            menu.path.parent().map(Path::to_path_buf).unwrap_or_else(|| menu.path.clone())
+        }
+    }
+
+    /// Adds the menu's folder to the permanent exclude list (once per scope), saves the
+    /// config and returns the folder's display name.
+    fn add_excluded_location(&mut self, menu: &ActiveContextMenu, scope: ExcludeScope) -> String {
+        let path = Self::context_target_folder(menu);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let exists = self.config.excluded_locations.iter().any(|l| l.path == path && l.scope == scope);
+        if !exists {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            self.config.excluded_locations.push(ExcludedLocation {
+                id: format!("excl_{millis}"),
+                name: name.clone(),
+                path,
+                scope,
+                enabled: true,
+            });
+            self.save_config();
+        }
+        name
+    }
     pub(super) fn render_modals(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         // --- UNIFIED CONTEXT MENU (KEYBOARD & MOUSE RIGHT-CLICK) ---
         if let Some(mut menu) = self.active_context_menu.take() {
@@ -325,86 +360,24 @@ impl FreeDataDietApp {
                         self.modal_focus = DeleteModalFocus::Permanent;
                     }
                     ContextAction::IgnoreFolderForDuplicates => {
-                        let target_folder = if menu.is_dir {
-                            menu.path.clone()
-                        } else {
-                            menu.path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| menu.path.clone())
-                        };
-                        let folder_name = target_folder
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| target_folder.to_string_lossy().to_string());
-
-                        let id = format!(
-                            "ign_dup_{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis())
-                                .unwrap_or(0)
-                        );
-                        if !self
-                            .config
-                            .excluded_locations
-                            .iter()
-                            .any(|loc| loc.path == target_folder && loc.scope == crate::config::ExcludeScope::IgnoreForDuplicates)
-                        {
-                            self.config.excluded_locations.push(crate::config::ExcludedLocation {
-                                id,
-                                name: folder_name.clone(),
-                                path: target_folder.clone(),
-                                scope: crate::config::ExcludeScope::IgnoreForDuplicates,
-                                enabled: true,
-                            });
-                            self.save_config();
-                        }
-
-                        // Remove occurrences from duplicate clusters immediately
+                        let folder_name = self.add_excluded_location(&menu, ExcludeScope::IgnoreForDuplicates);
+                        // Drop the folder's copies from the current results and rebuild the row cache.
+                        let target = Self::context_target_folder(&menu);
                         for cluster in &mut self.duplicate_clusters {
-                            cluster.occurrences.retain(|o| !o.path.starts_with(&target_folder));
+                            cluster.occurrences.retain(|o| !o.path.starts_with(&target));
                         }
                         self.duplicate_clusters.retain(|c| c.occurrences.len() >= 2);
+                        self.duplicate_flat_rows_dirty = true;
                         self.recompute_duplicate_stats();
-                        self.update_duplicate_assistant();
                         self.status_toast = Some((
-                            format!("Permanently ignored folder for duplicates: {}", folder_name),
+                            format!("Permanently ignored folder for duplicates: {folder_name}"),
                             Instant::now(),
                         ));
                     }
                     ContextAction::HideFolderFromScan => {
-                        let target_folder = if menu.is_dir {
-                            menu.path.clone()
-                        } else {
-                            menu.path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| menu.path.clone())
-                        };
-                        let folder_name = target_folder
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| target_folder.to_string_lossy().to_string());
-
-                        let id = format!(
-                            "hide_scan_{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis())
-                                .unwrap_or(0)
-                        );
-                        if !self
-                            .config
-                            .excluded_locations
-                            .iter()
-                            .any(|loc| loc.path == target_folder && loc.scope == crate::config::ExcludeScope::HideFromScan)
-                        {
-                            self.config.excluded_locations.push(crate::config::ExcludedLocation {
-                                id,
-                                name: folder_name.clone(),
-                                path: target_folder.clone(),
-                                scope: crate::config::ExcludeScope::HideFromScan,
-                                enabled: true,
-                            });
-                            self.save_config();
-                        }
+                        let folder_name = self.add_excluded_location(&menu, ExcludeScope::HideFromScan);
                         self.status_toast = Some((
-                            format!("Folder added to scan exclusions: {}", folder_name),
+                            format!("Folder added to scan exclusions: {folder_name}"),
                             Instant::now(),
                         ));
                         self.trigger_scan();

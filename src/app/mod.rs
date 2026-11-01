@@ -56,6 +56,8 @@ pub struct FreeDataDietApp {
     pub(super) safety_warning: Option<(String, Option<PathBuf>)>,
     pub(super) cancel_duplicate_hashing: Arc<AtomicBool>,
     pub(super) is_finding_duplicates: bool,
+    pub(super) duplicate_started: Instant,
+    pub(super) duplicate_duration: Option<Duration>,
     pub(super) duplicate_progress_text: String,
     pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<crate::duplicate::DuplicateMessage>>,
     pub(super) duplicate_total_wasted: u64,
@@ -148,6 +150,8 @@ impl FreeDataDietApp {
             safety_warning: None,
             cancel_duplicate_hashing: Arc::new(AtomicBool::new(false)),
             is_finding_duplicates: false,
+            duplicate_started: Instant::now(),
+            duplicate_duration: None,
             duplicate_progress_text: String::new(),
             duplicate_receiver: None,
             duplicate_total_wasted: 0,
@@ -305,6 +309,8 @@ impl FreeDataDietApp {
         self.active_suggestion = None;
         self.safety_warning = None;
         self.is_finding_duplicates = true;
+        self.duplicate_started = Instant::now();
+        self.duplicate_duration = None;
         self.duplicate_progress_text = "Starting duplicate scan...".to_string();
 
         let ignore_dup_paths: Vec<PathBuf> = self
@@ -600,6 +606,7 @@ impl FreeDataDietApp {
                                     self.duplicate_clusters = clusters;
                                     self.sort_duplicate_clusters();
                                     self.is_finding_duplicates = false;
+                                    self.duplicate_duration = Some(self.duplicate_started.elapsed());
                                     self.duplicate_receiver = None;
                                     self.duplicate_flat_rows_dirty = true;
                                     self.active_suggestion = None;

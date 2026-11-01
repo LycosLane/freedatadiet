@@ -54,10 +54,16 @@ impl FreeDataDietApp {
                         .iter()
                         .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
                         .count();
+                    let secs = |d: Option<Duration>| d.map_or(0.0, |d| d.as_secs_f32());
+                    let hash_secs = secs(self.duplicate_duration);
+                    let scan_secs = secs(self.summary.as_ref().map(|s| s.duration));
                     ui.label(RichText::new(format!(
-                        "Duplicate Search Complete: {} groups  |  Wasted Space: {}",
+                        "Duplicate Search Complete: {} groups  |  Wasted Space: {}  |  {:.1}s (scan {:.1}s + compare {:.1}s)",
                         active_clusters_count,
-                        format_size(self.duplicate_total_wasted)
+                        format_size(self.duplicate_total_wasted),
+                        scan_secs + hash_secs,
+                        scan_secs,
+                        hash_secs
                     )).small());
                 } else if let Some(summary) = &self.summary {
                     ui.label(RichText::new(format!(

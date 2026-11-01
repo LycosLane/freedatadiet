@@ -363,6 +363,7 @@ impl FreeDataDietApp {
         }
         let flat_rows = self.cached_duplicate_flat_rows.clone();
         let total_rows = flat_rows.len();
+        self.selected_duplicate_row_idx = self.selected_duplicate_row_idx.min(total_rows.saturating_sub(1));
 
         let mut scroll_to_selected = self.force_scroll_to_selected;
         self.force_scroll_to_selected = false;
