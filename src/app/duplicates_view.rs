@@ -56,6 +56,54 @@ impl FreeDataDietApp {
 
         // Action controls toolbar row
         ui.horizontal(|ui| {
+            // --- DUPLICATE SORT BUTTONS ---
+            ui.label(RichText::new("Sort:").weak());
+            let sort_columns = [
+                (crate::config::DuplicateSortColumn::WastedSpace, "Wasted Space"),
+                (crate::config::DuplicateSortColumn::FileSize, "File Size"),
+                (crate::config::DuplicateSortColumn::Name, "Name"),
+                (crate::config::DuplicateSortColumn::Count, "Copies"),
+            ];
+
+            for (col, label) in sort_columns {
+                let is_active = self.config.duplicate_sort_column == col;
+                let arrow = if is_active {
+                    match self.config.duplicate_sort_direction {
+                        crate::model::SortDirection::Ascending => " ^",
+                        crate::model::SortDirection::Descending => " v",
+                    }
+                } else {
+                    ""
+                };
+
+                let btn_text = format!("{}{}", label, arrow);
+                let btn = if is_active {
+                    egui::Button::new(RichText::new(btn_text).strong().color(Color32::WHITE))
+                        .fill(Color32::from_rgb(225, 120, 20))
+                } else {
+                    egui::Button::new(RichText::new(btn_text).color(if is_dark { Color32::from_gray(200) } else { Color32::from_gray(50) }))
+                };
+
+                if ui.add(btn).clicked() {
+                    if is_active {
+                        self.config.duplicate_sort_direction = match self.config.duplicate_sort_direction {
+                            crate::model::SortDirection::Ascending => crate::model::SortDirection::Descending,
+                            crate::model::SortDirection::Descending => crate::model::SortDirection::Ascending,
+                        };
+                    } else {
+                        self.config.duplicate_sort_column = col;
+                        self.config.duplicate_sort_direction = match col {
+                            crate::config::DuplicateSortColumn::Name => crate::model::SortDirection::Ascending,
+                            _ => crate::model::SortDirection::Descending,
+                        };
+                    }
+                    self.save_config();
+                    self.sort_duplicate_clusters();
+                }
+            }
+
+            ui.separator();
+
             if ui
                 .button("Keep First Copy in All")
                 .on_hover_text("Marks all redundant copies for deletion while keeping the first occurrence in each group")
@@ -68,7 +116,7 @@ impl FreeDataDietApp {
                     }
                 }
                 self.safety_warning = None;
-                self.update_duplicate_assistant();
+                self.active_suggestion = None;
                 self.recompute_duplicate_stats();
             }
 
@@ -90,7 +138,7 @@ impl FreeDataDietApp {
                     cluster.set_group_selected(false);
                 }
                 self.safety_warning = None;
-                self.update_duplicate_assistant();
+                self.active_suggestion = None;
                 self.recompute_duplicate_stats();
             }
 
@@ -181,10 +229,24 @@ impl FreeDataDietApp {
                         } else {
                             sugg.folder_name.clone()
                         };
-                        if ui
-                            .button(RichText::new(format!("Select Copies in \"{}\"", folder_display)).strong())
-                            .clicked()
-                        {
+                        let (btn_action_label, is_unsel) = match sugg.action {
+                            crate::duplicate::SuggestionAction::Select => (
+                                format!("Select Copies in \"{}\"", folder_display),
+                                false,
+                            ),
+                            crate::duplicate::SuggestionAction::Unselect => (
+                                format!("Unselect Copies in \"{}\"", folder_display),
+                                true,
+                            ),
+                        };
+                        let action_btn = egui::Button::new(RichText::new(btn_action_label).strong()).fill(
+                            if is_unsel {
+                                Color32::from_rgb(80, 85, 105)
+                            } else {
+                                Color32::from_rgb(225, 120, 20)
+                            },
+                        );
+                        if ui.add(action_btn).clicked() {
                             apply_sugg = true;
                         }
                         if ui.button("Dismiss").clicked() {
@@ -197,15 +259,16 @@ impl FreeDataDietApp {
         if apply_sugg {
             if let Some(sugg) = &self.active_suggestion {
                 let candidates = sugg.candidate_paths.clone();
+                let sel_val = sugg.action == crate::duplicate::SuggestionAction::Select;
                 for cluster in &mut self.duplicate_clusters {
                     for occ in &mut cluster.occurrences {
                         if candidates.contains(&occ.path) && !occ.is_system_protected {
-                            occ.is_selected = true;
+                            occ.is_selected = sel_val;
                         }
                     }
                 }
             }
-            self.update_duplicate_assistant();
+            self.active_suggestion = None;
             self.recompute_duplicate_stats();
         }
         if dismiss_sugg {
@@ -325,6 +388,7 @@ impl FreeDataDietApp {
         self.force_scroll_to_selected = false;
         let mut open_context_menu: Option<ActiveContextMenu> = None;
         let mut stats_dirty = false;
+        let mut manual_toggled: Option<(PathBuf, bool)> = None;
         let mut ignore_cluster_id: Option<String> = None;
         let mut new_warning: Option<(String, Option<PathBuf>)> = None;
 
@@ -369,7 +433,8 @@ impl FreeDataDietApp {
                             let occ_path = occ.path.clone();
                             cluster.set_copy_selected(&occ_path, new_val);
                             stats_dirty = true;
-            self.duplicate_flat_rows_dirty = true;
+                            manual_toggled = Some((occ_path.clone(), new_val));
+                            self.duplicate_flat_rows_dirty = true;
                             if new_val && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                 let first_p = cluster.occurrences.first().map(|o| o.path.clone());
                                 new_warning = Some((
@@ -552,6 +617,7 @@ impl FreeDataDietApp {
                                     let cb = ui.add_enabled(!is_sys, egui::Checkbox::new(&mut copy_checked, ""));
                                     if cb.changed() {
                                         cluster.set_copy_selected(&occ_path, copy_checked);
+                                        manual_toggled = Some((occ_path.clone(), copy_checked));
                                         stats_dirty = true;
             self.duplicate_flat_rows_dirty = true;
                                         if copy_checked && cluster.are_all_copies_selected() && !cluster.is_group_selected {
@@ -636,8 +702,11 @@ impl FreeDataDietApp {
             self.duplicate_flat_rows_dirty = true;
         }
 
+        if let Some((p, is_sel)) = manual_toggled {
+            self.on_manual_duplicate_toggled(&p, is_sel);
+        }
+
         if stats_dirty {
-            self.update_duplicate_assistant();
             self.recompute_duplicate_stats();
         }
 

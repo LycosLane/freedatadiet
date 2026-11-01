@@ -1,6 +1,7 @@
 pub mod duplicates_view;
 pub mod modals;
 pub mod shortcuts_dialog;
+pub mod shortcuts_handler;
 pub mod sidebar;
 pub mod sidebar_settings;
 pub mod sorting;
@@ -451,7 +452,7 @@ impl FreeDataDietApp {
             }
         }
         self.safety_warning = None;
-        self.update_duplicate_assistant();
+        self.active_suggestion = None;
         self.recompute_duplicate_stats();
     }
 
@@ -502,29 +503,54 @@ impl FreeDataDietApp {
         self.visible_indices_dirty = false;
     }
 
-    pub(super) fn update_duplicate_assistant(&mut self) {
+    pub(super) fn sort_duplicate_clusters(&mut self) {
+        let col = self.config.duplicate_sort_column;
+        let dir = self.config.duplicate_sort_direction;
+
+        self.duplicate_clusters.sort_by(|a, b| {
+            let cmp = match col {
+                crate::config::DuplicateSortColumn::WastedSpace => a.wasted_bytes().cmp(&b.wasted_bytes()),
+                crate::config::DuplicateSortColumn::FileSize => a.file_size.cmp(&b.file_size),
+                crate::config::DuplicateSortColumn::Name => {
+                    a.primary_name.to_lowercase().cmp(&b.primary_name.to_lowercase())
+                }
+                crate::config::DuplicateSortColumn::Count => a.occurrences.len().cmp(&b.occurrences.len()),
+            };
+            match dir {
+                crate::model::SortDirection::Ascending => cmp,
+                crate::model::SortDirection::Descending => cmp.reverse(),
+            }
+        });
+
+        self.duplicate_flat_rows_dirty = true;
+    }
+
+    pub(super) fn on_manual_duplicate_toggled(
+        &mut self,
+        toggled_path: &std::path::Path,
+        is_now_selected: bool,
+    ) {
         if !self.config.enable_duplicate_suggestions {
             self.active_suggestion = None;
             return;
         }
+
         let active_clusters: Vec<DuplicateCluster> = self
             .duplicate_clusters
             .iter()
             .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
             .cloned()
             .collect();
-        let mut selected_set = std::collections::HashSet::new();
-        for cluster in &active_clusters {
-            for occ in &cluster.occurrences {
-                if occ.is_selected {
-                    selected_set.insert(occ.path.clone());
-                }
-            }
-        }
-        self.active_suggestion = DuplicateEngine::find_folder_suggestion(
+
+        self.active_suggestion = DuplicateEngine::find_manual_folder_suggestion(
             &active_clusters,
-            &selected_set,
+            toggled_path,
+            is_now_selected,
         );
+    }
+
+    pub(super) fn update_duplicate_assistant(&mut self) {
+        // Suggestions are intentionally triggered only by direct manual item toggles
     }
 
     fn poll_scanner(&mut self) {
@@ -634,13 +660,14 @@ impl FreeDataDietApp {
                                 }
                                 crate::duplicate::DuplicateMessage::Completed(clusters) => {
                                     self.duplicate_clusters = clusters;
+                                    self.sort_duplicate_clusters();
                                     self.is_finding_duplicates = false;
                                     self.duplicate_receiver = None;
                                     self.duplicate_flat_rows_dirty = true;
+                                    self.active_suggestion = None;
                                     if self.config.enable_duplicate_suggestions {
                                         self.apply_category_duplicate_rules();
                                     }
-                                    self.update_duplicate_assistant();
                                     self.recompute_duplicate_stats();
                                     break;
                                 }
@@ -718,127 +745,7 @@ impl eframe::App for FreeDataDietApp {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fs));
         }
 
-        // Global F12, F4 & Ctrl+, for Live Settings & Favorites Left Panel
-        let f12_pressed = ui.input(|i| i.key_pressed(egui::Key::F12));
-        let f4_pressed = ui.input(|i| i.key_pressed(egui::Key::F4));
-        let ctrl_comma_pressed = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Comma));
-        if !self.show_shortcuts_modal
-            && ((self.config.shortcuts.f12_settings && f12_pressed)
-                || f4_pressed
-                || (self.config.shortcuts.ctrl_comma_settings && ctrl_comma_pressed))
-        {
-            self.config.show_sidebar = !self.config.show_sidebar;
-            self.save_config();
-        }
-
-        // Global F5 shortcut for Refresh
-        let f5_pressed = ui.input(|i| i.key_pressed(egui::Key::F5));
-        if self.config.shortcuts.f5_refresh
-            && f5_pressed
-            && !self.show_shortcuts_modal
-            && self.delete_modal == DeleteConfirmState::None
-        {
-            self.trigger_scan();
-        }
-
-        // Global F6 shortcut for Include Subfolders
-        let f6_pressed = ui.input(|i| i.key_pressed(egui::Key::F6));
-        if f6_pressed
-            && !self.show_shortcuts_modal
-            && self.delete_modal == DeleteConfirmState::None
-        {
-            self.config.flatten_subfolders = !self.config.flatten_subfolders;
-            let msg = if self.config.flatten_subfolders {
-                "Include Subfolders enabled"
-            } else {
-                "Include Subfolders disabled"
-            };
-            self.status_toast = Some((msg.to_string(), Instant::now()));
-            self.save_config();
-            self.trigger_scan();
-        }
-
-        // Global F3 shortcut for Live Filter Search Bar (activate / toggle)
-        let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
-        if self.config.shortcuts.f3_search_filter
-            && f3_pressed
-            && !self.show_shortcuts_modal
-            && self.delete_modal == DeleteConfirmState::None
-        {
-            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-            self.filter_bar_active = !self.filter_bar_active;
-            if !self.filter_bar_active {
-                self.quick_search_buffer.clear();
-            }
-            self.save_config();
-        }
-
-        if !ui.ctx().egui_wants_keyboard_input()
-            && self.delete_modal == DeleteConfirmState::None
-            && self.active_context_menu.is_none()
-            && !self.show_shortcuts_modal
-        {
-            let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-            let shift = ui.input(|i| i.modifiers.shift);
-            let h_pressed = ui.input(|i| i.key_pressed(egui::Key::H));
-            let d_pressed = ui.input(|i| i.key_pressed(egui::Key::D));
-            let b_pressed = ui.input(|i| i.key_pressed(egui::Key::B));
-            let f_pressed = ui.input(|i| i.key_pressed(egui::Key::F));
-            let f2_pressed = ui.input(|i| i.key_pressed(egui::Key::F2));
-
-            if self.config.shortcuts.ctrl_f_filter && ctrl && !shift && f_pressed {
-                self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-                self.filter_bar_active = true;
-                self.quick_search_buffer.clear();
-                self.panel_focus = ActivePanelFocus::MainView;
-                self.save_config();
-            } else if self.config.shortcuts.f2_search_mode && f2_pressed {
-                self.config.quick_search_mode = match self.config.quick_search_mode {
-                    QuickSearchMode::JumpToPrefix => QuickSearchMode::LiveFilter,
-                    _ => QuickSearchMode::JumpToPrefix,
-                };
-                let mode_str = match self.config.quick_search_mode {
-                    QuickSearchMode::LiveFilter => "Quick Search: Live Filter",
-                    QuickSearchMode::JumpToPrefix => "Quick Search: Jump to Name",
-                    QuickSearchMode::Disabled => "Quick Search: Disabled",
-                };
-                self.status_toast = Some((mode_str.to_string(), Instant::now()));
-                self.quick_search_buffer.clear();
-                self.save_config();
-            } else if self.config.shortcuts.ctrl_shift_h_system && ctrl && shift && h_pressed {
-                self.config.show_system_files = !self.config.show_system_files;
-                self.save_config();
-                self.sort_entries();
-            } else if self.config.shortcuts.ctrl_h_hidden && ctrl && !shift && h_pressed {
-                self.config.show_hidden_files = !self.config.show_hidden_files;
-                self.save_config();
-                self.sort_entries();
-            } else if ctrl && shift && d_pressed {
-                if let Some(sugg) = &self.active_suggestion {
-                    let candidate_paths = sugg.candidate_paths.clone();
-                    for cluster in &mut self.duplicate_clusters {
-                        for occ in &mut cluster.occurrences {
-                            if candidate_paths.contains(&occ.path) && !occ.is_system_protected {
-                                occ.is_selected = true;
-                            }
-                        }
-                    }
-                    self.update_duplicate_assistant();
-                }
-            } else if ctrl && !shift && d_pressed {
-                self.config.show_duplicates_only = !self.config.show_duplicates_only;
-                self.save_config();
-                self.trigger_scan();
-            } else if ctrl && !shift && b_pressed {
-                let added = LocationManager::toggle_favorite(&mut self.config, &self.current_path);
-                let msg = if added {
-                    "Added current folder to Favorites"
-                } else {
-                    "Removed current folder from Favorites"
-                };
-                self.status_toast = Some((msg.to_string(), Instant::now()));
-            }
-        }
+        self.handle_global_shortcuts(ui);
 
         // --- TOP PANEL ---
         self.render_top_bar(ui, is_dark);

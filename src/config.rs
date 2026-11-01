@@ -337,6 +337,30 @@ impl Default for CategoryDuplicateRules {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DuplicateSortColumn {
+    #[default]
+    WastedSpace,
+    FileSize,
+    Name,
+    Count,
+}
+
+impl DuplicateSortColumn {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DuplicateSortColumn::WastedSpace => "Wasted Space",
+            DuplicateSortColumn::FileSize => "File Size",
+            DuplicateSortColumn::Name => "Name",
+            DuplicateSortColumn::Count => "Copies",
+        }
+    }
+}
+
+fn default_sort_dir_desc() -> SortDirection {
+    SortDirection::Descending
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExcludePattern {
     pub pattern: String,
@@ -497,6 +521,10 @@ pub struct AppConfig {
     pub excluded_locations: Vec<ExcludedLocation>,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    #[serde(default)]
+    pub duplicate_sort_column: DuplicateSortColumn,
+    #[serde(default = "default_sort_dir_desc")]
+    pub duplicate_sort_direction: SortDirection,
 }
 
 impl Default for AppConfig {
@@ -532,6 +560,8 @@ impl Default for AppConfig {
             category_duplicate_rules: CategoryDuplicateRules::default(),
             excluded_locations: Vec::new(),
             ui_scale: 1.0,
+            duplicate_sort_column: DuplicateSortColumn::WastedSpace,
+            duplicate_sort_direction: SortDirection::Descending,
         }
     }
 }

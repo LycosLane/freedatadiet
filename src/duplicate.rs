@@ -145,7 +145,9 @@ pub enum DuplicateMessage {
     Completed(Vec<DuplicateCluster>),
 }
 
-pub use crate::duplicate_suggestion::{find_folder_suggestion, DuplicateSuggestion};
+pub use crate::duplicate_suggestion::{
+    find_folder_suggestion, find_manual_folder_suggestion, DuplicateSuggestion, SuggestionAction,
+};
 
 fn subpartition_by<T, K, F>(groups: Vec<Vec<T>>, key_fn: F) -> Vec<Vec<T>>
 where
@@ -603,8 +605,14 @@ impl DuplicateEngine {
         }
     }
 
-    /// Analyzes selected duplicates and identifies sibling duplicates residing in
-    /// the same folder where originals are preserved outside that directory.
+    pub fn find_manual_folder_suggestion(
+        clusters: &[DuplicateCluster],
+        toggled_path: &Path,
+        is_now_selected: bool,
+    ) -> Option<DuplicateSuggestion> {
+        crate::duplicate_suggestion::find_manual_folder_suggestion(clusters, toggled_path, is_now_selected)
+    }
+
     pub fn find_folder_suggestion(
         clusters: &[DuplicateCluster],
         selected_paths: &HashSet<PathBuf>,
@@ -787,15 +795,12 @@ mod tests {
         };
 
         let clusters = vec![cluster1, cluster2];
-        let mut selected = HashSet::new();
-        selected.insert(PathBuf::from("C:\\Sync\\photo1.jpg"));
-
-        let sugg = DuplicateEngine::find_folder_suggestion(&clusters, &selected).expect("Must find folder pattern suggestion");
+        let toggled = PathBuf::from("C:\\Sync\\photo1.jpg");
+        let sugg = DuplicateEngine::find_manual_folder_suggestion(&clusters, &toggled, true)
+            .expect("Must find manual folder pattern suggestion");
         assert_eq!(sugg.folder_path, PathBuf::from("C:\\Sync"));
         assert_eq!(sugg.candidate_paths, vec![PathBuf::from("C:\\Sync\\photo2.jpg")]);
         assert_eq!(sugg.reclaimable_bytes, 600);
-        assert!(sugg.message.contains("Pattern Match"));
-        assert!(sugg.message.contains("Sync"));
-        assert!(sugg.message.contains("Keep"));
+        assert_eq!(sugg.action, crate::duplicate_suggestion::SuggestionAction::Select);
     }
 }
