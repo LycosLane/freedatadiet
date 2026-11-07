@@ -525,8 +525,8 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
         ui.add_space(2.0);
 
         let s_modes = [
-            (14, QuickSearchMode::JumpToPrefix, "Jump to name (Explorer)", Some("F2")),
-            (15, QuickSearchMode::LiveFilter, "Live filter (narrow list as you type)", Some("Ctrl+F")),
+            (14, QuickSearchMode::JumpToPrefix, "Type to select", Some("F2")),
+            (15, QuickSearchMode::LiveFilter, "Type to filter", Some("Ctrl+F")),
             (16, QuickSearchMode::Disabled, "Disabled", None),
         ];
 

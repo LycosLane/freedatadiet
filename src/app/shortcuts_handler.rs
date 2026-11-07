@@ -97,8 +97,8 @@ impl FreeDataDietApp {
                     _ => QuickSearchMode::JumpToPrefix,
                 };
                 let mode_str = match self.config.quick_search_mode {
-                    QuickSearchMode::LiveFilter => "Quick Search: Live Filter",
-                    QuickSearchMode::JumpToPrefix => "Quick Search: Jump to Name",
+                    QuickSearchMode::LiveFilter => "Quick Search: Type to Filter",
+                    QuickSearchMode::JumpToPrefix => "Quick Search: Type to Select",
                     QuickSearchMode::Disabled => "Quick Search: Disabled",
                 };
                 self.status_toast = Some((mode_str.to_string(), Instant::now()));
