@@ -108,6 +108,7 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 | **Ctrl + H** | Toggle hidden files and folders |
 | **Ctrl + Shift + H** | Toggle protected system files and NTFS junctions |
 | **F12 / Ctrl + ,** | Open / close Settings & Preferences dialog |
+| **Ctrl + Plus / Minus / 0** | Increase / decrease / reset UI scale (80% to 200%) |
 | **F1 / ?** | Open / close Keyboard Shortcuts cheat sheet |
 | **F11** | Toggle fullscreen mode |
 | **Double Click** | Enter directory or open file |
@@ -119,10 +120,13 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 ## Features & Highlights
 
-* **Multi-Stage Duplicate Finder:** Identifies bit-exact duplicate files using 64 KB prefix and suffix hashing followed by 1 MB streaming SHA-256 blocks with zero memory bloat.
+* **Multi-Stage Duplicate Finder:** Identifies bit-exact duplicate files using 64 KB prefix and suffix hashing followed by streaming SHA-256 blocks with zero memory bloat.
+* **Live Threshold Adjustment:** Minimum file size slider can be adjusted mid-scan to skip smaller candidates immediately without restarting.
+* **Advanced Duplicate Filtering:** Type-to-filter with intuitive syntax: `word` (match), `-word` (exclude entire group), `--word` (exclude specific folder copy while preserving group), `\-` (literal hyphen search), and `---` (exclude paths with hyphens).
 * **Selection Safety Gate:** Selecting all duplicate copies in a cluster requires explicit confirmation via the primary file header checkbox before complete deletion is permitted.
 * **Duplicate Assistant:** Identifies sibling duplicates in the same directory whose counterparts are preserved elsewhere, offering one-click batch cleanup.
 * **Category Duplicate Rules:** Configurable automatic selection recommendations per file type (Keep Oldest, Keep Newest, Keep First, or Off).
+* **Interactive UI Scaling:** Adjust interface scale from 80% to 200% with real-time resizing and keyboard shortcuts.
 * **In-Memory Deletion:** Immediate list updates upon deletion without triggering slow, repetitive disk rescans.
 * **Empty Folder Cleanup:** Prompts to clean up or inspect folders left empty after deleting redundant duplicates.
 * **Ignored Locations Management:** Permanently ignore folders for duplicate searches or hide them completely from scanning.
@@ -143,6 +147,8 @@ Commercial disk analyzers wrap basic filesystem inspection in nagware, lock esse
 
 Settings persist in a human-readable `config.json`. It lives next to the executable if one exists there (portable use, default on Windows when the folder is writable), otherwise in your user config folder (`%APPDATA%\FreeDataDiet`, `~/.config/FreeDataDiet`, `~/Library/Application Support/FreeDataDiet`):
 * Theme (`"Dark"`, `"Light"`, `"System"`)
+* UI scale factor (`ui_scale`: 0.8 to 2.0)
+* Minimum duplicate file size threshold (`duplicate_min_size_kb`)
 * Usage bar scaling (`"LargestItem"`, `"Folder"`, `"DriveUsed"`, `"DriveTotal"`)
 * Column order
 * Multi-column sort rules
