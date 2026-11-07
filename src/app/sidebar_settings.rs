@@ -322,6 +322,12 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
             self.save_config();
             *trigger_rescan = true;
         }
+        if self.show_custom_excludes_input
+            && pattern_editor(ui, "App & media cache patterns:", &mut self.config.preset_media_patterns, DEFAULT_MEDIA_PATTERNS)
+        {
+            self.save_config();
+            *trigger_rescan = true;
+        }
 
         let is_f_7 = is_panel_focused && self.settings_nav_idx == 7;
         let pill_dev = setting_pill(ui, self.ignore_dev_caches, is_f_7, "Ignore dev & repo caches", None, false, false, is_dark)
@@ -329,6 +335,12 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
         if pill_dev.clicked() || (is_f_7 && key_activate) {
             self.ignore_dev_caches = !self.ignore_dev_caches;
             self.config.ignore_dev_caches = self.ignore_dev_caches;
+            self.save_config();
+            *trigger_rescan = true;
+        }
+        if self.show_custom_excludes_input
+            && pattern_editor(ui, "Dev & repo patterns:", &mut self.config.preset_dev_patterns, DEFAULT_DEV_PATTERNS)
+        {
             self.save_config();
             *trigger_rescan = true;
         }
@@ -342,17 +354,15 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
             self.save_config();
             *trigger_rescan = true;
         }
+        if self.show_custom_excludes_input
+            && pattern_editor(ui, "Temp & crash dump patterns:", &mut self.config.preset_temp_patterns, DEFAULT_TEMP_PATTERNS)
+        {
+            self.save_config();
+            *trigger_rescan = true;
+        }
 
         if self.show_custom_excludes_input {
             ui.add_space(3.0);
-            let mut presets_changed = false;
-            presets_changed |= pattern_editor(ui, "App & media cache patterns:", &mut self.config.preset_media_patterns, DEFAULT_MEDIA_PATTERNS);
-            presets_changed |= pattern_editor(ui, "Dev & repo patterns:", &mut self.config.preset_dev_patterns, DEFAULT_DEV_PATTERNS);
-            presets_changed |= pattern_editor(ui, "Temp & crash dump patterns:", &mut self.config.preset_temp_patterns, DEFAULT_TEMP_PATTERNS);
-            if presets_changed {
-                self.save_config();
-                *trigger_rescan = true;
-            }
             ui.add_space(3.0);
             ui.label(RichText::new("Custom Exclude Patterns (comma-separated):").weak().small());
             let edit = ui.add(
@@ -516,7 +526,7 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
 
         let s_modes = [
             (14, QuickSearchMode::JumpToPrefix, "Jump to name (Explorer)", Some("F2")),
-            (15, QuickSearchMode::LiveFilter, "Filter list as you type (FilePilot)", Some("Ctrl+F")),
+            (15, QuickSearchMode::LiveFilter, "Live filter (narrow list as you type)", Some("Ctrl+F")),
             (16, QuickSearchMode::Disabled, "Disabled", None),
         ];
 

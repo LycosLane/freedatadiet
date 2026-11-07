@@ -58,7 +58,8 @@ impl FreeDataDietApp {
                     let hash_secs = secs(self.duplicate_duration);
                     let scan_secs = secs(self.summary.as_ref().map(|s| s.duration));
                     ui.label(RichText::new(format!(
-                        "Duplicate Search Complete: {} groups  |  Wasted Space: {}  |  {:.1}s (scan {:.1}s + compare {:.1}s)",
+                        "Duplicate Search ({}) Complete: {} groups  |  Wasted Space: {}  |  {:.1}s (scan {:.1}s + compare {:.1}s)",
+                        if self.config.flatten_subfolders { "incl. subfolders" } else { "this folder only" },
                         active_clusters_count,
                         format_size(self.duplicate_total_wasted),
                         scan_secs + hash_secs,

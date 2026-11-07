@@ -101,7 +101,7 @@ impl FreeDataDietApp {
                         add_toggle(ui, "Ctrl + F", "Activate Live Filter search bar", &mut self.config.shortcuts.ctrl_f_filter);
                         add_toggle(ui, "F2", "Cycle search mode (Jump to Name vs Live Filter)", &mut self.config.shortcuts.f2_search_mode);
                         add_toggle(ui, "F3", "Activate Live Filter search bar", &mut self.config.shortcuts.f3_search_filter);
-                        add_fixed(ui, "A-Z, 0-9", "Jump to name (Explorer) or live filter the list (FilePilot)");
+                        add_fixed(ui, "A-Z, 0-9", "Jump to name (Explorer) or live filter the list");
                         add_fixed(ui, "Esc", "Clear active search filter query or dismiss popup");
 
                         add_sec(ui, "File Operations & Modes");

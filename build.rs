@@ -23,7 +23,7 @@ fn main() {
 
     // Standard Windows RC format with icon and VERSIONINFO
     let ico_path_str = ico_path.to_str().unwrap().replace('\\', "/");
-    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "1.8.0".to_string());
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "1.8.1".to_string());
     let mut version_parts = version.split('.');
     let major: u16 = version_parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
     let minor: u16 = version_parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);

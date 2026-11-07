@@ -244,6 +244,8 @@ impl FreeDataDietApp {
 
         self.entries.clear();
         self.duplicate_clusters.clear();
+        self.duplicate_receiver = None;
+        self.is_finding_duplicates = false;
         self.active_suggestion = None;
         self.safety_warning = None;
         self.selected_path = None;

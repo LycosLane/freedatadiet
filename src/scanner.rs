@@ -725,3 +725,42 @@ fn scan_flattened(
         }));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Collects the files a scan reports, as the duplicate search would receive them.
+    fn scanned_files(root: &Path, flatten: bool) -> Vec<PathBuf> {
+        let handle = start_scan(vec![root.to_path_buf()], Vec::new(), flatten);
+        let mut files = Vec::new();
+        for msg in handle.receiver.iter() {
+            match msg {
+                ScanMessage::InitialEntries(entries) => {
+                    files.extend(entries.into_iter().filter(|e| !e.is_dir).map(|e| e.path));
+                }
+                ScanMessage::EntryUpdated(e) if !e.is_dir => files.push(e.path),
+                ScanMessage::Completed(_) | ScanMessage::Failed(_) => break,
+                _ => {}
+            }
+        }
+        files
+    }
+
+    #[test]
+    fn test_scan_includes_subfolder_files_only_when_flattened() {
+        let root = std::env::temp_dir().join("fdd_test_flatten_scan");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("top.txt"), b"abc").unwrap();
+        std::fs::write(root.join("sub").join("deep.txt"), b"abc").unwrap();
+
+        let plain = scanned_files(&root, false);
+        assert!(plain.iter().any(|p| p.ends_with("top.txt")));
+        assert!(!plain.iter().any(|p| p.ends_with("deep.txt")));
+
+        let flat = scanned_files(&root, true);
+        assert!(flat.iter().any(|p| p.ends_with("deep.txt")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
