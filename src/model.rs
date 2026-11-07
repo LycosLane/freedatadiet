@@ -85,6 +85,7 @@ pub struct FileEntry {
     pub is_access_denied: bool,
     pub is_partially_locked: bool,
     pub is_system_protected: bool,
+    pub is_system_file: bool,
     pub is_hidden: bool,
     pub is_reparse_point: bool,
     pub is_scanning: bool,
@@ -95,7 +96,8 @@ impl FileEntry {
     /// Creates an entry with zero size and default flags. Set measured values
     /// with struct update syntax: `FileEntry { size, ..FileEntry::new(..) }`.
     pub fn new(name: String, path: PathBuf, is_dir: bool) -> Self {
-        let (is_system_protected, is_hidden, is_reparse_point) = detect_path_attributes(&path, &name);
+        let (is_system_protected, is_system_file, is_hidden, is_reparse_point) =
+            detect_path_attributes(&path, &name);
         let category = FileCategory::from_path_and_dir(&path, is_dir);
         Self {
             name,
@@ -108,6 +110,7 @@ impl FileEntry {
             is_access_denied: false,
             is_partially_locked: false,
             is_system_protected,
+            is_system_file,
             is_hidden,
             is_reparse_point,
             is_scanning: false,
@@ -116,7 +119,24 @@ impl FileEntry {
     }
 }
 
-pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
+pub fn is_os_system_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "$recycle.bin"
+            | "system volume information"
+            | "pagefile.sys"
+            | "hiberfil.sys"
+            | "swapfile.sys"
+            | "dumpstack.log.tmp"
+            | "bootmgr"
+            | "bootnxt"
+            | "config.msi"
+            | "documents and settings"
+    )
+}
+
+pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool, bool) {
     let is_sys_path = is_system_path(path);
     #[cfg(windows)]
     {
@@ -124,21 +144,24 @@ pub fn detect_path_attributes(path: &Path, name: &str) -> (bool, bool, bool) {
         if let Ok(meta) = std::fs::symlink_metadata(path) {
             let attrs = meta.file_attributes();
             let is_hidden = (attrs & 0x0000_0002) != 0 || name.starts_with('.');
-            let is_system = (attrs & 0x0000_0004) != 0 || is_sys_path;
-            // Only real links count: Windows also sets the reparse flag on cloud placeholders (OneDrive etc.)
+            let is_sys_attr = (attrs & 0x0000_0004) != 0 || is_os_system_name(name);
             let is_reparse = meta.file_type().is_symlink();
-            return (is_system, is_hidden, is_reparse);
+            let is_protected = is_sys_attr || is_sys_path;
+            return (is_protected, is_sys_attr, is_hidden, is_reparse);
         }
     }
     #[cfg(not(windows))]
     {
+        let is_sys_attr = matches!(path.to_str(), Some("/proc" | "/sys" | "/dev"));
         if let Ok(meta) = std::fs::symlink_metadata(path) {
             let is_hidden = name.starts_with('.');
             let is_reparse = meta.file_type().is_symlink();
-            return (is_sys_path, is_hidden, is_reparse);
+            let is_protected = is_sys_attr || is_sys_path;
+            return (is_protected, is_sys_attr, is_hidden, is_reparse);
         }
     }
-    (is_sys_path, name.starts_with('.'), false)
+    let is_sys_attr = is_os_system_name(name);
+    (is_sys_path || is_sys_attr, is_sys_attr, name.starts_with('.'), false)
 }
 
 #[cfg(windows)]
@@ -321,4 +344,32 @@ pub fn format_epoch_secs(secs: u64) -> String {
     let day = days + 1;
 
     format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hour, min)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_program_files_and_windows_are_not_system_files() {
+        let pf = Path::new("C:\\Program Files");
+        let (is_prot, is_sys, is_hidden, _) = detect_path_attributes(pf, "Program Files");
+        assert!(!is_sys, "Program Files must not be marked as a hidden OS system file");
+        assert!(!is_hidden, "Program Files is not a hidden directory");
+        assert!(is_prot, "Program Files remains protected against accidental deletion");
+
+        let win = Path::new("C:\\Windows");
+        let (is_prot_win, is_sys_win, is_hidden_win, _) = detect_path_attributes(win, "Windows");
+        assert!(!is_sys_win, "Windows must not be marked as a hidden OS system file");
+        assert!(!is_hidden_win, "Windows directory is not hidden");
+        assert!(is_prot_win, "Windows remains protected against accidental deletion");
+
+        let sysvol = Path::new("C:\\System Volume Information");
+        let (_, is_sys_vol, _, _) = detect_path_attributes(sysvol, "System Volume Information");
+        assert!(is_sys_vol, "System Volume Information must be recognized as an OS system file");
+
+        let pagefile = Path::new("C:\\pagefile.sys");
+        let (_, is_sys_page, _, _) = detect_path_attributes(pagefile, "pagefile.sys");
+        assert!(is_sys_page, "pagefile.sys must be recognized as an OS system file");
+    }
 }

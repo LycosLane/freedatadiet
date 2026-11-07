@@ -454,11 +454,11 @@ impl FreeDataDietApp {
             .enumerate()
             .filter(|(_, e)| {
                 if !self.config.show_hidden_files
-                    && (e.is_hidden || (e.is_reparse_point && e.is_system_protected))
+                    && (e.is_hidden || (e.is_reparse_point && e.is_system_file))
                 {
                     return false;
                 }
-                if !self.config.show_system_files && e.is_system_protected {
+                if !self.config.show_system_files && e.is_system_file {
                     return false;
                 }
                 if !self.config.show_locked_folders && e.is_access_denied {

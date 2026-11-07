@@ -8,7 +8,7 @@
 > A fast, lightweight disk usage analyzer built with Rust & egui.  
 > *Find what is eating your storage with no installer required and no subscriptions.*
 
-[![Version: 1.11.0](https://img.shields.io/badge/version-1.11.0-blue.svg)]()
+[![Version: 1.11.1](https://img.shields.io/badge/version-1.11.1-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6.svg)]()
 [![Built with Rust](https://img.shields.io/badge/Built%20with-Rust%20%26%20egui-DEA584.svg)]()

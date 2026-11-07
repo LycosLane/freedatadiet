@@ -26,7 +26,7 @@ pub fn get_type_badge(entry: &FileEntry, is_dark: bool) -> (String, Color32, &'s
             if is_dark { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(130, 70, 200) },
             "Link: Directory junction or symbolic link to another folder",
         )
-    } else if entry.is_system_protected {
+    } else if entry.is_system_file {
         (
             "[SYS]".to_string(),
             if is_dark { Color32::from_rgb(255, 175, 40) } else { Color32::from_rgb(200, 110, 0) },
