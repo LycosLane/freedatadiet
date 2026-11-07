@@ -75,6 +75,31 @@ pub fn setting_pill(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Largest value of the minimum-size slider, in KB (10 GB).
+const MIN_SIZE_MAX_KB: f64 = 10.0 * 1024.0 * 1024.0;
+
+/// Parses typed sizes such as "14 MB", "1gb", "500" (KB) or "off" into KB.
+fn parse_size_kb(text: &str) -> Option<f64> {
+    let text = text.trim().to_lowercase();
+    if text == "off" {
+        return Some(0.0);
+    }
+    let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == ','))?;
+    let (number, unit) = if split == 0 { return None } else { text.split_at(split) };
+    let value: f64 = number.replace(',', ".").parse().ok()?;
+    let factor = match unit.trim() {
+        "" | "k" | "kb" => 1.0,
+        "m" | "mb" => 1024.0,
+        "g" | "gb" => 1024.0 * 1024.0,
+        "b" => 1.0 / 1024.0,
+        _ => return None,
+    };
+    Some(value * factor)
+}
+
+fn parse_size_or_plain_kb(text: &str) -> Option<f64> {
+    parse_size_kb(text).or_else(|| text.trim().replace(',', ".").parse().ok())
+}
 /// One editable, comma-separated pattern list with a reset button.
 /// Returns true once editing finished (focus lost) after a change.
 fn pattern_editor(ui: &mut egui::Ui, label: &str, text: &mut String, default: &str) -> bool {
@@ -98,7 +123,47 @@ fn pattern_editor(ui: &mut egui::Ui, label: &str, text: &mut String, default: &s
     finished
 }
 
-impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
+impl FreeDataDietApp {    /// Logarithmic "skip files smaller than" slider plus quick presets.
+    /// The value is applied on release; returns true when it changed.
+    fn min_size_slider(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label(RichText::new("Skip files smaller than (type a value like 14 MB):").weak().small());
+        let draft_id = ui.scope_id().with("dup_min_size_draft");
+        let mut kb = ui
+            .data(|d| d.get_temp::<f64>(draft_id))
+            .unwrap_or(self.config.duplicate_min_size_kb as f64);
+        let response = ui.add(
+            egui::Slider::new(&mut kb, 0.0..=MIN_SIZE_MAX_KB)
+                .logarithmic(true)
+                .smallest_positive(1.0)
+                .custom_formatter(|n, _| match n as u64 {
+                    0 => "Off".to_string(),
+                    kb => format_size(kb * 1024),
+                })
+                .custom_parser(parse_size_or_plain_kb),
+        );
+        let mut new_kb = None;
+        if response.is_pointer_button_down_on() {
+            ui.data_mut(|d| d.insert_temp(draft_id, kb));
+        } else {
+            ui.data_mut(|d| d.remove_temp::<f64>(draft_id));
+            new_kb = Some(kb.round() as u64);
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (kb, text) in [(0u64, "Off"), (64, "64 KB"), (1024, "1 MB"), (102_400, "100 MB"), (1_048_576, "1 GB")] {
+                if ui.small_button(text).clicked() {
+                    new_kb = Some(kb);
+                }
+            }
+        });
+        match new_kb {
+            Some(kb) if kb != self.config.duplicate_min_size_kb => {
+                self.config.duplicate_min_size_kb = kb;
+                true
+            }
+            _ => false,
+        }
+    }
+    pub(super) fn render_sidebar_settings(
         &mut self,
         ui: &mut egui::Ui,
         is_dark: bool,
@@ -278,20 +343,9 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
                 }
             }
 
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Skip files smaller than:").weak().small());
-                let label = match self.config.duplicate_min_size_kb {
-                    0 => "Off".to_string(),
-                    kb => format_size(kb * 1024),
-                };
-                egui::ComboBox::from_id_salt("dup_min_size").selected_text(label).show_ui(ui, |ui| {
-                    for (kb, text) in [(0u64, "Off"), (1, "1 KB"), (4, "4 KB"), (64, "64 KB"), (1024, "1 MB")] {
-                        if ui.selectable_value(&mut self.config.duplicate_min_size_kb, kb, text).changed() {
-                            crit_changed = true;
-                        }
-                    }
-                });
-            });
+            if self.min_size_slider(ui) {
+                crit_changed = true;
+            }
             if crit_changed {
                 self.save_config();
                 *recompute_dups = true;
@@ -721,5 +775,20 @@ impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
         }
 
         ui.add_space(10.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_size_kb() {
+        assert_eq!(parse_size_kb("14 MB"), Some(14.0 * 1024.0));
+        assert_eq!(parse_size_kb("1gb"), Some(1024.0 * 1024.0));
+        assert_eq!(parse_size_kb("500kb"), Some(500.0));
+        assert_eq!(parse_size_kb("off"), Some(0.0));
+        assert_eq!(parse_size_kb("abc"), None);
+        assert_eq!(parse_size_or_plain_kb("250"), Some(250.0));
     }
 }
