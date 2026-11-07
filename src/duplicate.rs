@@ -325,7 +325,7 @@ pub enum DuplicateFilterTerm {
 /// and \- / -\- / --\- escaping.
 pub fn filter_terms(text: &str) -> Vec<DuplicateFilterTerm> {
     let mut terms = Vec::new();
-    for token in text.split_whitespace() {
+    for token in text.split_whitespace().take(32) {
         if token.is_empty() {
             continue;
         }

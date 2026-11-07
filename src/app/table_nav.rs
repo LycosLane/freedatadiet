@@ -88,7 +88,9 @@ impl FreeDataDietApp {
                         *do_navigate_up = true;
                     }
                 } else if !typed_text.is_empty() {
-                    self.quick_search_buffer.push_str(&typed_text);
+                    if self.quick_search_buffer.len() < 128 {
+                        self.quick_search_buffer.push_str(&typed_text);
+                    }
                     self.filter_bar_active = true;
                     self.visible_indices_dirty = true;
                     *scroll_to_selected = true;
@@ -130,7 +132,9 @@ impl FreeDataDietApp {
                                 *scroll_to_selected = true;
                             }
                         } else {
-                            self.quick_search_buffer.push(ch);
+                            if self.quick_search_buffer.len() < 128 {
+                                self.quick_search_buffer.push(ch);
+                            }
                             let query = self.quick_search_buffer.to_lowercase();
                             if let Some(&idx) = self.visible_indices.iter().find(|&&idx| self.entries[idx].name.to_lowercase().starts_with(&query)) {
                                 self.selected_path = Some(self.entries[idx].path.clone());

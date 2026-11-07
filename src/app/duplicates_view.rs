@@ -82,6 +82,7 @@ impl FreeDataDietApp {
             ui.label("Filter:");
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.duplicate_filter)
+                    .char_limit(256)
                     .hint_text("Filter (e.g. .jpg -synology --draft)")
                     .desired_width((ui.available_width() - 64.0).max(80.0)),
             ).on_hover_text("Filter duplicate items:\n  word : group must contain 'word'\n  -word : exclude entire group containing 'word'\n  --word : exclude specific path containing 'word'\n  \\- : search for literal '-' character\n  --- : exclude paths containing '-'");
