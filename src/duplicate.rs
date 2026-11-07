@@ -124,6 +124,15 @@ impl DuplicateCluster {
             occ.is_selected = i != keep && !occ.is_system_protected;
         }
     }
+    /// True when every filter term occurs in the group's name or in any of its full paths.
+    /// The terms must already be lowercase (see filter_terms).
+    pub fn matches_filter(&self, terms: &[String]) -> bool {
+        terms.iter().all(|term| {
+            self.primary_name.to_lowercase().contains(term.as_str())
+                || self.occurrences.iter().any(|o| o.path.to_string_lossy().to_lowercase().contains(term.as_str()))
+        })
+    }
+
     /// Toggles the group-level checkbox.
     /// When checked, automatically selects all individual copies for purge.
     /// When unchecked, deselects all copies.
@@ -165,6 +174,11 @@ pub enum DuplicateMessage {
     Completed(Vec<DuplicateCluster>),
 }
 
+
+/// Splits the duplicate filter text into lowercase terms; a group must match all of them.
+pub fn filter_terms(text: &str) -> Vec<String> {
+    text.split_whitespace().map(str::to_lowercase).collect()
+}
 
 fn subpartition_by<T, K, F>(groups: Vec<Vec<T>>, key_fn: F) -> Vec<Vec<T>>
 where
@@ -457,8 +471,32 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_folder_pattern_suggestion() {
-        let occ1_a = DuplicateOccurrence {
+    fn test_filter_matches_any_full_path_of_the_group() {
+        let occ = |p: &str| DuplicateOccurrence {
+            path: PathBuf::from(p),
+            name: "a.jpg".into(),
+            size: 10,
+            modified: None,
+            file_id: None,
+            is_hardlink: false,
+            is_system_protected: false,
+            is_selected: false,
+        };
+        let cluster = DuplicateCluster {
+            cluster_id: "c".into(),
+            primary_name: "a.jpg".into(),
+            file_size: 10,
+            is_group_selected: false,
+            occurrences: vec![occ("C:\\Photos\\Holiday\\a.jpg"), occ("C:\\Backup\\a.jpg")],
+        };
+        assert!(cluster.matches_filter(&filter_terms("")));
+        assert!(cluster.matches_filter(&filter_terms(".JPG")));
+        assert!(cluster.matches_filter(&filter_terms("holiday backup")));
+        assert!(!cluster.matches_filter(&filter_terms("holiday .png")));
+    }
+
+    #[test]
+    fn test_duplicate_folder_pattern_suggestion() {        let occ1_a = DuplicateOccurrence {
             path: PathBuf::from("C:\\Keep\\photo1.jpg"),
             name: "photo1.jpg".into(),
             size: 500,

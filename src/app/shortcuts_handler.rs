@@ -64,12 +64,16 @@ impl FreeDataDietApp {
             && !self.show_shortcuts_modal
             && self.delete_modal == DeleteConfirmState::None
         {
-            self.config.quick_search_mode = QuickSearchMode::LiveFilter;
-            self.filter_bar_active = !self.filter_bar_active;
-            if !self.filter_bar_active {
-                self.quick_search_buffer.clear();
+            if self.config.show_duplicates_only {
+                self.focus_duplicate_filter = true;
+            } else {
+                self.config.quick_search_mode = QuickSearchMode::LiveFilter;
+                self.filter_bar_active = !self.filter_bar_active;
+                if !self.filter_bar_active {
+                    self.quick_search_buffer.clear();
+                }
+                self.save_config();
             }
-            self.save_config();
         }
 
         if !ui.ctx().egui_wants_keyboard_input()
@@ -85,7 +89,9 @@ impl FreeDataDietApp {
             let f_pressed = ui.input(|i| i.key_pressed(egui::Key::F));
             let f2_pressed = ui.input(|i| i.key_pressed(egui::Key::F2));
 
-            if self.config.shortcuts.ctrl_f_filter && ctrl && !shift && f_pressed {
+            if self.config.shortcuts.ctrl_f_filter && ctrl && !shift && f_pressed && self.config.show_duplicates_only {
+                self.focus_duplicate_filter = true;
+            } else if self.config.shortcuts.ctrl_f_filter && ctrl && !shift && f_pressed {
                 self.config.quick_search_mode = QuickSearchMode::LiveFilter;
                 self.filter_bar_active = true;
                 self.quick_search_buffer.clear();

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Panel};
 
 use crate::config::{AppConfig, AppTheme, QuickSearchMode};
-use crate::duplicate::{DuplicateCluster, DuplicateEngine};
+use crate::duplicate::{filter_terms, DuplicateCluster, DuplicateEngine};
 use crate::duplicate_suggestion::DuplicateSuggestion;
 use crate::locations::LocationManager;
 use crate::model::{DriveInfo, FileEntry};
@@ -57,6 +57,9 @@ pub struct FreeDataDietApp {
     pub(super) cancel_duplicate_hashing: Arc<AtomicBool>,
     pub(super) is_finding_duplicates: bool,
     pub(super) duplicate_started: Instant,
+    /// Text filter for the duplicate list; matching groups are shown with all their copies.
+    pub(super) duplicate_filter: String,
+    pub(super) focus_duplicate_filter: bool,
     /// Minimum file size (KB) the current duplicate results were computed with.
     pub(super) duplicate_computed_min_kb: u64,
     /// Live minimum size (bytes) shared with the running duplicate search.
@@ -115,6 +118,15 @@ pub struct FreeDataDietApp {
     pub(super) show_update_modal: bool,
 }
 
+/// A group is listed, counted and acted on when it is not ignored and matches the filter.
+pub(super) fn cluster_visible(
+    cluster: &DuplicateCluster,
+    ignored: &std::collections::HashSet<String>,
+    terms: &[String],
+) -> bool {
+    !ignored.contains(&cluster.cluster_id) && cluster.matches_filter(terms)
+}
+
 impl FreeDataDietApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config = AppConfig::load();
@@ -155,6 +167,8 @@ impl FreeDataDietApp {
             cancel_duplicate_hashing: Arc::new(AtomicBool::new(false)),
             is_finding_duplicates: false,
             duplicate_started: Instant::now(),
+            duplicate_filter: String::new(),
+            focus_duplicate_filter: false,
             duplicate_computed_min_kb: 0,
             duplicate_min_size_live: Arc::new(AtomicU64::new(0)),
             duplicate_duration: None,
@@ -278,6 +292,7 @@ impl FreeDataDietApp {
             self.quick_search_buffer.clear();
             self.quick_search_time = None;
             self.filter_bar_active = false;
+            self.duplicate_filter.clear();
             self.selected_favorites.clear();
             self.current_path = path;
             self.save_config();
@@ -370,8 +385,9 @@ impl FreeDataDietApp {
         let mut eligible_bytes = 0u64;
         let mut blocked_count = 0usize;
 
+        let terms = filter_terms(&self.duplicate_filter);
         for cluster in &self.duplicate_clusters {
-            if self.ignored_cluster_ids.contains(&cluster.cluster_id) {
+            if !cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
                 continue;
             }
             total_wasted += cluster.wasted_bytes();
@@ -395,8 +411,9 @@ impl FreeDataDietApp {
             return;
         }
         let rules = self.config.category_duplicate_rules;
+        let terms = filter_terms(&self.duplicate_filter);
         for cluster in &mut self.duplicate_clusters {
-            if self.ignored_cluster_ids.contains(&cluster.cluster_id) {
+            if !cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
                 continue;
             }
             let cat = crate::model::FileCategory::from_path_and_dir(
@@ -504,10 +521,11 @@ impl FreeDataDietApp {
             return;
         }
 
+        let terms = filter_terms(&self.duplicate_filter);
         let active_clusters: Vec<DuplicateCluster> = self
             .duplicate_clusters
             .iter()
-            .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
+            .filter(|c| cluster_visible(c, &self.ignored_cluster_ids, &terms))
             .cloned()
             .collect();
 

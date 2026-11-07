@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use eframe::egui::{self, Color32, RichText, ScrollArea, Sense, Stroke};
 
 use crate::config::DuplicateRulePreference;
+use crate::duplicate::filter_terms;
 use crate::model::{format_size, format_system_time};
 use crate::platform;
 
 use super::modals::{ActiveContextMenu, DeleteConfirmState, DeleteModalFocus};
-use super::FreeDataDietApp;
+use super::{cluster_visible, FreeDataDietApp};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DuplicateRowItem {
@@ -20,7 +21,11 @@ impl FreeDataDietApp {
     fn open_batch_delete_modal(&mut self, focus: DeleteModalFocus) {
         let mut paths = Vec::new();
         let mut total_size = 0u64;
+        let terms = filter_terms(&self.duplicate_filter);
         for cluster in &self.duplicate_clusters {
+            if !cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
+                continue;
+            }
             let cluster_paths = cluster.deletable_paths();
             total_size += cluster_paths.len() as u64 * cluster.file_size;
             paths.extend(cluster_paths);
@@ -29,7 +34,12 @@ impl FreeDataDietApp {
         self.modal_focus = focus;
     }
     pub(super) fn render_duplicates_view(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        let total_clusters = self.duplicate_clusters.len();
+        let terms = filter_terms(&self.duplicate_filter);
+        let total_clusters = self
+            .duplicate_clusters
+            .iter()
+            .filter(|c| cluster_visible(c, &self.ignored_cluster_ids, &terms))
+            .count();
 
         // --- TOP DUPLICATES METRICS & ACTION BAR ---
         ui.horizontal(|ui| {
@@ -65,6 +75,31 @@ impl FreeDataDietApp {
         });
 
         ui.add_space(2.0);
+
+        // Filter row: groups match when any of their full paths contains every term.
+        let mut filter_changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Filter:");
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut self.duplicate_filter)
+                    .hint_text("file name, extension or folder (e.g. .jpg holiday)")
+                    .desired_width((ui.available_width() - 64.0).max(80.0)),
+            );
+            if std::mem::take(&mut self.focus_duplicate_filter) {
+                edit.request_focus();
+            }
+            filter_changed |= edit.changed();
+            let escape = edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let clear = !self.duplicate_filter.is_empty() && (ui.small_button("Clear").clicked() || escape);
+            if clear {
+                self.duplicate_filter.clear();
+                filter_changed = true;
+            }
+        });
+        if filter_changed {
+            self.duplicate_flat_rows_dirty = true;
+            self.recompute_duplicate_stats();
+        }
 
         // Action controls toolbar row
         ui.horizontal(|ui| {
@@ -121,8 +156,11 @@ impl FreeDataDietApp {
                 .on_hover_text("Marks all redundant copies for deletion while keeping the first occurrence in each group")
                 .clicked()
             {
+                let terms = filter_terms(&self.duplicate_filter);
                 for cluster in &mut self.duplicate_clusters {
-                    cluster.keep_one(DuplicateRulePreference::KeepFirst);
+                    if cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
+                        cluster.keep_one(DuplicateRulePreference::KeepFirst);
+                    }
                 }
                 self.safety_warning = None;
                 self.active_suggestion = None;
@@ -354,8 +392,9 @@ impl FreeDataDietApp {
         // Build or reuse cached flat row mapping for virtualized rendering (skipping ignored clusters)
         if self.duplicate_flat_rows_dirty || self.cached_duplicate_flat_rows.is_empty() {
             self.cached_duplicate_flat_rows.clear();
+            let terms = filter_terms(&self.duplicate_filter);
             for c_idx in 0..self.duplicate_clusters.len() {
-                if self.ignored_cluster_ids.contains(&self.duplicate_clusters[c_idx].cluster_id) {
+                if !cluster_visible(&self.duplicate_clusters[c_idx], &self.ignored_cluster_ids, &terms) {
                     continue;
                 }
                 self.cached_duplicate_flat_rows.push(DuplicateRowItem::Header(c_idx));

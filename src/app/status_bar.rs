@@ -49,10 +49,11 @@ impl FreeDataDietApp {
                         }
                     }
                 } else if self.config.show_duplicates_only {
+                    let terms = crate::duplicate::filter_terms(&self.duplicate_filter);
                     let active_clusters_count = self
                         .duplicate_clusters
                         .iter()
-                        .filter(|c| !self.ignored_cluster_ids.contains(&c.cluster_id))
+                        .filter(|c| super::cluster_visible(c, &self.ignored_cluster_ids, &terms))
                         .count();
                     let secs = |d: Option<Duration>| d.map_or(0.0, |d| d.as_secs_f32());
                     let hash_secs = secs(self.duplicate_duration);
