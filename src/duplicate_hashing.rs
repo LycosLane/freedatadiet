@@ -88,11 +88,13 @@ pub fn refine<'a, F>(
 where
     F: Fn(&FileEntry) -> std::io::Result<Option<Hash>> + Sync,
 {
-    let candidates: Vec<(usize, &FileEntry)> = groups
+    let mut candidates: Vec<(usize, &FileEntry)> = groups
         .iter()
         .enumerate()
         .flat_map(|(i, g)| g.iter().map(move |f| (i, *f)))
         .collect();
+    // Neighbouring files are read together, which is much faster on spinning disks.
+    candidates.sort_by(|a, b| a.1.path.cmp(&b.1.path));
     let total = candidates.len();
     if total == 0 {
         return Some(Vec::new());

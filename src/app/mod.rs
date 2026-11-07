@@ -215,32 +215,14 @@ impl FreeDataDietApp {
             }
         };
 
-        if self.ignore_dev_caches {
-            [
-                ".git", ".svn", ".hg", "node_modules", "target", ".cargo",
-                ".venv", "venv", "__pycache__", ".gradle", ".m2",
-            ]
-            .into_iter()
-            .for_each(&mut add);
-        }
-        if self.ignore_media_caches {
-            [
-                "*cache*", "*thumb*", ".gallery", "OptimizedMedia", "ProxyMedia",
-                "Media Cache Files", "Media Cache", "DerivedDataCache",
-            ]
-            .into_iter()
-            .for_each(&mut add);
-        }
-        if self.ignore_temp_caches {
-            [
-                "Temp", "CrashDumps", "Prefetch", "DeliveryOptimization",
-                "$RECYCLE.BIN", "System Volume Information", ".Trash-*",
-                "*.dmp", "*.tmp",
-            ]
-            .into_iter()
-            .for_each(&mut add);
-        }
-        for item in self.custom_excludes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let presets = [
+            (self.ignore_dev_caches, &self.config.preset_dev_patterns),
+            (self.ignore_media_caches, &self.config.preset_media_patterns),
+            (self.ignore_temp_caches, &self.config.preset_temp_patterns),
+        ];
+        for (_, patterns) in presets.iter().filter(|(enabled, _)| *enabled) {
+            patterns.split(',').map(str::trim).filter(|s| !s.is_empty()).for_each(&mut add);
+        }        for item in self.custom_excludes.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             add(item);
         }
         for p in self.config.excluded_patterns.iter().filter(|p| p.enabled) {
@@ -274,7 +256,7 @@ impl FreeDataDietApp {
 
         self.path_input = self.current_path.to_string_lossy().to_string();
         let excludes = self.collect_excludes();
-        let flatten = self.config.flatten_subfolders || self.config.show_duplicates_only;
+        let flatten = self.config.flatten_subfolders;
         let scan_roots = if self.selected_favorites.len() > 1 {
             self.selected_favorites.iter().cloned().collect()
         } else {
@@ -321,10 +303,11 @@ impl FreeDataDietApp {
             .map(|l| l.path.clone())
             .collect();
 
+        let min_size = self.config.duplicate_min_size_kb * 1024;
         let entries_clone: Vec<FileEntry> = self
             .entries
             .iter()
-            .filter(|e| !ignore_dup_paths.iter().any(|ignored| e.path.starts_with(ignored)))
+            .filter(|e| e.size >= min_size && !ignore_dup_paths.iter().any(|ignored| e.path.starts_with(ignored)))
             .cloned()
             .collect();
 
@@ -531,7 +514,7 @@ impl FreeDataDietApp {
                     self.scanned_counter = scanned_items;
                 }
                 ScanMessage::InitialEntries(entries) => {
-                    if self.config.flatten_subfolders || self.config.show_duplicates_only {
+                    if self.config.flatten_subfolders {
                         self.entries.extend(entries);
                     } else {
                         self.entries = entries;

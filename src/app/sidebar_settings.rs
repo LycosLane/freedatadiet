@@ -1,9 +1,10 @@
 use eframe::egui::{self, Color32, RichText, Sense, Stroke};
 
 use crate::config::{
-    AppConfig, AppTheme, CategoryDuplicateRules, DuplicateRulePreference, QuickSearchMode,
+    DEFAULT_DEV_PATTERNS, DEFAULT_MEDIA_PATTERNS, DEFAULT_TEMP_PATTERNS, AppConfig, AppTheme, CategoryDuplicateRules, DuplicateRulePreference, QuickSearchMode,
     UsageBasis,
 };
+use crate::model::format_size;
 use super::FreeDataDietApp;
 
 pub fn setting_pill(
@@ -74,8 +75,30 @@ pub fn setting_pill(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-impl FreeDataDietApp {
-    pub(super) fn render_sidebar_settings(
+/// One editable, comma-separated pattern list with a reset button.
+/// Returns true once editing finished (focus lost) after a change.
+fn pattern_editor(ui: &mut egui::Ui, label: &str, text: &mut String, default: &str) -> bool {
+    let mut finished = false;
+    ui.label(RichText::new(label).weak().small());
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - 52.0).max(60.0);
+        let edit = ui.add(egui::TextEdit::singleline(text).desired_width(width));
+        let dirty_id = edit.id.with("dirty");
+        if edit.changed() {
+            ui.data_mut(|d| d.insert_temp(dirty_id, true));
+        }
+        if edit.lost_focus() && ui.data_mut(|d| d.remove_temp::<bool>(dirty_id)).unwrap_or(false) {
+            finished = true;
+        }
+        if ui.small_button("Reset").on_hover_text("Restore the built-in list").clicked() {
+            *text = default.to_string();
+            finished = true;
+        }
+    });
+    finished
+}
+
+impl FreeDataDietApp {    pub(super) fn render_sidebar_settings(
         &mut self,
         ui: &mut egui::Ui,
         is_dark: bool,
@@ -255,6 +278,20 @@ impl FreeDataDietApp {
                 }
             }
 
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Skip files smaller than:").weak().small());
+                let label = match self.config.duplicate_min_size_kb {
+                    0 => "Off".to_string(),
+                    kb => format_size(kb * 1024),
+                };
+                egui::ComboBox::from_id_salt("dup_min_size").selected_text(label).show_ui(ui, |ui| {
+                    for (kb, text) in [(0u64, "Off"), (1, "1 KB"), (4, "4 KB"), (64, "64 KB"), (1024, "1 MB")] {
+                        if ui.selectable_value(&mut self.config.duplicate_min_size_kb, kb, text).changed() {
+                            crit_changed = true;
+                        }
+                    }
+                });
+            });
             if crit_changed {
                 self.save_config();
                 *recompute_dups = true;
@@ -269,7 +306,7 @@ impl FreeDataDietApp {
             ui.label(RichText::new("Exclude & Ignore Filters").size(13.5).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let plus_label = if self.show_custom_excludes_input { "[-] Less" } else { "[+] Custom" };
-                if ui.small_button(plus_label).on_hover_text("Toggle custom exclude pattern field").clicked() {
+                if ui.small_button(plus_label).on_hover_text("Edit the pattern lists behind these filters").clicked() {
                     self.show_custom_excludes_input = !self.show_custom_excludes_input;
                 }
             });
@@ -278,7 +315,7 @@ impl FreeDataDietApp {
 
         let is_f_6 = is_panel_focused && self.settings_nav_idx == 6;
         let pill_media = setting_pill(ui, self.ignore_media_caches, is_f_6, "Ignore app & media caches", None, false, false, is_dark)
-            .on_hover_text("Ignore DaVinci (CacheClip, .gallery), Adobe (Media Cache), Blender, ShaderCache, thumbs.db");
+            .on_hover_text("Skip app and media caches. Edit the list via [+] Custom");
         if pill_media.clicked() || (is_f_6 && key_activate) {
             self.ignore_media_caches = !self.ignore_media_caches;
             self.config.ignore_media_caches = self.ignore_media_caches;
@@ -288,7 +325,7 @@ impl FreeDataDietApp {
 
         let is_f_7 = is_panel_focused && self.settings_nav_idx == 7;
         let pill_dev = setting_pill(ui, self.ignore_dev_caches, is_f_7, "Ignore dev & repo caches", None, false, false, is_dark)
-            .on_hover_text("Ignore .git, node_modules, target, .venv, .cargo, .gradle, __pycache__");
+            .on_hover_text("Skip dev and repo folders. Edit the list via [+] Custom");
         if pill_dev.clicked() || (is_f_7 && key_activate) {
             self.ignore_dev_caches = !self.ignore_dev_caches;
             self.config.ignore_dev_caches = self.ignore_dev_caches;
@@ -298,7 +335,7 @@ impl FreeDataDietApp {
 
         let is_f_8 = is_panel_focused && self.settings_nav_idx == 8;
         let pill_temp = setting_pill(ui, self.ignore_temp_caches, is_f_8, "Ignore temp & crash dumps", None, false, false, is_dark)
-            .on_hover_text("Ignore Temp, Prefetch, CrashDumps, $RECYCLE.BIN, *.dmp, *.tmp");
+            .on_hover_text("Skip temp files and crash dumps. Edit the list via [+] Custom");
         if pill_temp.clicked() || (is_f_8 && key_activate) {
             self.ignore_temp_caches = !self.ignore_temp_caches;
             self.config.ignore_temp_caches = self.ignore_temp_caches;
@@ -307,6 +344,15 @@ impl FreeDataDietApp {
         }
 
         if self.show_custom_excludes_input {
+            ui.add_space(3.0);
+            let mut presets_changed = false;
+            presets_changed |= pattern_editor(ui, "App & media cache patterns:", &mut self.config.preset_media_patterns, DEFAULT_MEDIA_PATTERNS);
+            presets_changed |= pattern_editor(ui, "Dev & repo patterns:", &mut self.config.preset_dev_patterns, DEFAULT_DEV_PATTERNS);
+            presets_changed |= pattern_editor(ui, "Temp & crash dump patterns:", &mut self.config.preset_temp_patterns, DEFAULT_TEMP_PATTERNS);
+            if presets_changed {
+                self.save_config();
+                *trigger_rescan = true;
+            }
             ui.add_space(3.0);
             ui.label(RichText::new("Custom Exclude Patterns (comma-separated):").weak().small());
             let edit = ui.add(
@@ -565,7 +611,7 @@ impl FreeDataDietApp {
         ui.horizontal(|ui| {
             ui.label("UI Scale:");
             // Apply the scale only on release: rescaling mid-drag moves the slider under the cursor.
-            let draft_id = ui.id().with("ui_scale_draft");
+            let draft_id = ui.scope_id().with("ui_scale_draft");
             let mut scale = ui.data(|d| d.get_temp::<f32>(draft_id)).unwrap_or(self.config.ui_scale);
             let response = ui.add(egui::Slider::new(&mut scale, 0.8..=1.5).step_by(0.05));
             if response.is_pointer_button_down_on() {

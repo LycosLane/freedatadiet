@@ -374,6 +374,29 @@ fn default_config_version() -> u32 {
     1
 }
 
+pub const DEFAULT_DEV_PATTERNS: &str =
+    ".git, .svn, .hg, node_modules, target, .cargo, .venv, venv, __pycache__, .gradle, .m2";
+pub const DEFAULT_MEDIA_PATTERNS: &str =
+    "*cache*, *thumb*, .gallery, OptimizedMedia, ProxyMedia, Media Cache Files, Media Cache, DerivedDataCache";
+pub const DEFAULT_TEMP_PATTERNS: &str =
+    "Temp, CrashDumps, Prefetch, DeliveryOptimization, $RECYCLE.BIN, System Volume Information, .Trash-*, *.dmp, *.tmp";
+
+fn default_dev_patterns() -> String {
+    DEFAULT_DEV_PATTERNS.to_string()
+}
+
+fn default_media_patterns() -> String {
+    DEFAULT_MEDIA_PATTERNS.to_string()
+}
+
+fn default_temp_patterns() -> String {
+    DEFAULT_TEMP_PATTERNS.to_string()
+}
+
+fn default_duplicate_min_size_kb() -> u64 {
+    4
+}
+
 fn default_custom_excludes() -> String {
     ".git, node_modules, target, .cache, .venv".to_string()
 }
@@ -470,6 +493,16 @@ pub struct AppConfig {
     pub ignore_media_caches: bool,
     #[serde(default = "default_true")]
     pub ignore_temp_caches: bool,
+    /// Editable pattern lists (comma-separated) behind the three preset filter toggles.
+    #[serde(default = "default_dev_patterns")]
+    pub preset_dev_patterns: String,
+    #[serde(default = "default_media_patterns")]
+    pub preset_media_patterns: String,
+    #[serde(default = "default_temp_patterns")]
+    pub preset_temp_patterns: String,
+    /// Duplicate search skips files smaller than this (0 = off).
+    #[serde(default = "default_duplicate_min_size_kb")]
+    pub duplicate_min_size_kb: u64,
     #[serde(default = "default_custom_excludes")]
     pub custom_excludes: String,
     #[serde(default = "default_excluded_patterns")]
@@ -536,7 +569,11 @@ impl Default for AppConfig {
             ignore_dev_caches: true,
             ignore_media_caches: true,
             ignore_temp_caches: true,
-            custom_excludes: default_custom_excludes(),
+            preset_dev_patterns: default_dev_patterns(),
+            preset_media_patterns: default_media_patterns(),
+            preset_temp_patterns: default_temp_patterns(),
+            duplicate_min_size_kb: default_duplicate_min_size_kb(),
+        custom_excludes: default_custom_excludes(),
             excluded_patterns: default_excluded_patterns(),
             saved_locations: default_saved_locations(),
             startup_mode: StartupLocationMode::LastVisitedPath,
@@ -711,6 +748,8 @@ mod tests {
         assert!(migrated.duplicate_criteria.match_size);
         assert!(!migrated.show_duplicates_only);
         assert!(migrated.enable_duplicate_suggestions);
+        assert_eq!(migrated.preset_dev_patterns, DEFAULT_DEV_PATTERNS);
+        assert_eq!(migrated.duplicate_min_size_kb, 4);
         assert_eq!(migrated.category_duplicate_rules.images, DuplicateRulePreference::KeepOldest);
         assert!(migrated.excluded_locations.is_empty());
     }
