@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -208,13 +208,15 @@ impl DuplicateEngine {
     /// 3-stage verification (64KB prefix, 64KB suffix, streamed full SHA-256).
     /// The final result is also sent as `DuplicateMessage::Completed` when a
     /// progress channel is given. A cancelled scan returns an empty list.
+    /// min_size is read live, so raising it mid-search skips the remaining small files.
     pub fn find_duplicates(
         entries: &[FileEntry],
         criteria: DuplicateCriteriaConfig,
         cancel_flag: &Arc<AtomicBool>,
+        min_size: &AtomicU64,
         progress_tx: Option<&Sender<DuplicateMessage>>,
     ) -> Vec<DuplicateCluster> {
-        let ctx = ScanContext { cancel: cancel_flag, tx: progress_tx };
+        let ctx = ScanContext { cancel: cancel_flag, min_size, tx: progress_tx };
         let Some(clusters) = Self::run_pipeline(entries, &criteria, &ctx) else {
             return Vec::new();
         };
@@ -410,7 +412,7 @@ mod tests {
             verify_hash: true,
         };
 
-        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, None);
+        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, &AtomicU64::new(0), None);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].occurrences.len(), 2);
         let paths: Vec<PathBuf> = clusters[0].occurrences.iter().map(|o| o.path.clone()).collect();
@@ -444,9 +446,13 @@ mod tests {
             verify_hash: true,
         };
         let cancel = Arc::new(AtomicBool::new(false));
-        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, None);
+        let clusters = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, &AtomicU64::new(0), None);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].occurrences.len(), 2);
+
+        // A live minimum above the file size skips hashing them entirely.
+        let skipped = DuplicateEngine::find_duplicates(&entries, criteria, &cancel, &AtomicU64::new(1_000_000), None);
+        assert!(skipped.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

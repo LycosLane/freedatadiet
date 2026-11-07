@@ -12,7 +12,7 @@ pub mod top_bar;
 pub use self::sorting::get_type_badge;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -59,6 +59,8 @@ pub struct FreeDataDietApp {
     pub(super) duplicate_started: Instant,
     /// Minimum file size (KB) the current duplicate results were computed with.
     pub(super) duplicate_computed_min_kb: u64,
+    /// Live minimum size (bytes) shared with the running duplicate search.
+    pub(super) duplicate_min_size_live: Arc<AtomicU64>,
     pub(super) duplicate_duration: Option<Duration>,
     pub(super) duplicate_progress_text: String,
     pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<crate::duplicate::DuplicateMessage>>,
@@ -154,6 +156,7 @@ impl FreeDataDietApp {
             is_finding_duplicates: false,
             duplicate_started: Instant::now(),
             duplicate_computed_min_kb: 0,
+            duplicate_min_size_live: Arc::new(AtomicU64::new(0)),
             duplicate_duration: None,
             duplicate_progress_text: String::new(),
             duplicate_receiver: None,
@@ -310,6 +313,8 @@ impl FreeDataDietApp {
 
         self.duplicate_computed_min_kb = self.config.duplicate_min_size_kb;
         let min_size = self.config.duplicate_min_size_kb * 1024;
+        self.duplicate_min_size_live = Arc::new(AtomicU64::new(min_size));
+        let live_min = Arc::clone(&self.duplicate_min_size_live);
         let entries_clone: Vec<FileEntry> = self
             .entries
             .iter()
@@ -322,21 +327,26 @@ impl FreeDataDietApp {
         let (tx, rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
-            let _ = DuplicateEngine::find_duplicates(&entries_clone, criteria, &cancel, Some(&tx));
+            let _ = DuplicateEngine::find_duplicates(&entries_clone, criteria, &cancel, &live_min, Some(&tx));
         });
 
         self.duplicate_receiver = Some(rx);
     }
 
     /// Reacts to a changed minimum size. Raising it only trims existing results (no
-    /// re-hashing, a running search keeps going); lowering it needs new files, so it restarts.
+    /// re-hashing, a running search skips the remaining small files); lowering it needs new
+    /// files, so it restarts.
     pub(super) fn on_min_size_changed(&mut self) {
         if self.is_scanning {
             return; // the search has not started yet and will read the new value
         }
         let raised = self.config.duplicate_min_size_kb > self.duplicate_computed_min_kb;
         if raised && self.config.duplicate_criteria.match_size {
-            if !self.is_finding_duplicates {
+            if self.is_finding_duplicates {
+                // Remaining small files are skipped by the running search; results are trimmed on completion.
+                self.duplicate_min_size_live
+                    .store(self.config.duplicate_min_size_kb * 1024, Ordering::Relaxed);
+            } else {
                 self.trim_clusters_to_min_size();
                 self.recompute_duplicate_stats();
                 self.duplicate_flat_rows_dirty = true;

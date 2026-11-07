@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 
 use rayon::prelude::*;
@@ -20,9 +20,11 @@ const STREAM_BUFFER_SIZE: usize = 1024 * 1024;
 pub type Hash = [u8; 32];
 pub type Group<'a> = Vec<&'a FileEntry>;
 
-/// Cancellation flag plus optional progress channel shared by all passes.
+/// Cancellation flag, live minimum file size and optional progress channel shared by all passes.
 pub struct ScanContext<'a> {
     pub cancel: &'a AtomicBool,
+    /// Files below this size (bytes) are skipped. The UI may raise it while a search runs.
+    pub min_size: &'a AtomicU64,
     pub tx: Option<&'a Sender<DuplicateMessage>>,
 }
 
@@ -108,7 +110,8 @@ where
             if ctx.cancelled() {
                 return None;
             }
-            let result = hash_fn(file).ok().flatten().map(|h| (i, h, file));
+            let skip = file.size < ctx.min_size.load(Ordering::Relaxed);
+            let result = if skip { None } else { hash_fn(file).ok().flatten().map(|h| (i, h, file)) };
             let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
             if done.is_multiple_of(report_every) || done == total {
                 ctx.progress(stage, done, total);
