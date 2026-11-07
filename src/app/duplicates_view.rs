@@ -314,7 +314,11 @@ impl FreeDataDietApp {
                         self.duplicate_progress_text.clone()
                     }
                 } else {
-                    format!("Scanning subfolders for duplicates... {} items analyzed", self.scanned_counter)
+                    if self.config.flatten_subfolders {
+                        format!("Scanning subfolders for duplicates... {} items analyzed", self.scanned_counter)
+                    } else {
+                        "Listing files in this folder...".to_string()
+                    }
                 };
                 ui.label(RichText::new(msg).italics().weak());
                 if self.is_finding_duplicates {

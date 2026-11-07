@@ -41,7 +41,14 @@ impl ScannerHandle {
     }
 }
 
-pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool) -> ScannerHandle {
+/// Starts a background scan. With list_only, folders are listed without measuring their
+/// contents (used by the duplicate search when subfolders are excluded).
+pub fn start_scan(
+    root_paths: Vec<PathBuf>,
+    excludes: Vec<String>,
+    flatten: bool,
+    list_only: bool,
+) -> ScannerHandle {
     let (tx, rx) = channel();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_clone = Arc::clone(&cancel_flag);
@@ -130,7 +137,7 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
                     total_files += 1;
                     (if is_dup { 0 } else { s }, if is_dup { 0 } else { a }, false)
                 } else {
-                    (0, 0, true)
+                    (0, 0, !list_only)
                 };
 
                 let mut item = FileEntry { size, allocated_size: allocated, modified, ..FileEntry::new(name.clone(), path.clone(), is_dir) };
@@ -145,6 +152,15 @@ pub fn start_scan(root_paths: Vec<PathBuf>, excludes: Vec<String>, flatten: bool
 
         // Send all discovered entries immediately so UI shows folders without delay!
         let _ = tx.send(ScanMessage::InitialEntries(initial_entries));
+        if list_only {
+            let _ = tx.send(ScanMessage::Completed(ScanSummary {
+                total_size,
+                total_allocated,
+                total_files,
+                duration: start_time.elapsed(),
+            }));
+            return;
+        }
 
         let child_paths = Arc::new(child_paths);
         let (worker_tx, worker_rx) = channel();
@@ -732,7 +748,7 @@ mod tests {
 
     /// Collects the files a scan reports, as the duplicate search would receive them.
     fn scanned_files(root: &Path, flatten: bool) -> Vec<PathBuf> {
-        let handle = start_scan(vec![root.to_path_buf()], Vec::new(), flatten);
+        let handle = start_scan(vec![root.to_path_buf()], Vec::new(), flatten, false);
         let mut files = Vec::new();
         for msg in handle.receiver.iter() {
             match msg {

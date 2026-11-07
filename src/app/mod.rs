@@ -264,7 +264,7 @@ impl FreeDataDietApp {
         } else {
             vec![self.current_path.clone()]
         };
-        self.scanner = Some(start_scan(scan_roots, excludes, flatten));
+        self.scanner = Some(start_scan(scan_roots, excludes, flatten, self.config.show_duplicates_only && !flatten));
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf) {
