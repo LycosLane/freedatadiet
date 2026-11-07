@@ -35,5 +35,6 @@ Thumbs.db
 
 # Local documentation & private guides (never pushed)
 .local_docs/
+BRANDING.md
 
 

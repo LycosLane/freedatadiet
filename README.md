@@ -170,12 +170,6 @@ cargo build --release
 
 ---
 
-## Brand Guidelines
-
-Official White Fedora mark specifications, vector assets, and color palette are documented in [BRANDING.md](BRANDING.md).
-
----
-
 ## License
 
 MIT License © 2026 LycosLane
