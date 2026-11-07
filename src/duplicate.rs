@@ -124,13 +124,73 @@ impl DuplicateCluster {
             occ.is_selected = i != keep && !occ.is_system_protected;
         }
     }
-    /// True when every filter term occurs in the group's name or in any of its full paths.
-    /// The terms must already be lowercase (see filter_terms).
-    pub fn matches_filter(&self, terms: &[String]) -> bool {
-        terms.iter().all(|term| {
-            self.primary_name.to_lowercase().contains(term.as_str())
-                || self.occurrences.iter().any(|o| o.path.to_string_lossy().to_lowercase().contains(term.as_str()))
-        })
+    /// True when the group matches the duplicate filter criteria:
+    /// - All Include terms must match either primary name or an unexcluded occurrence path.
+    /// - None of the ExcludeGroup terms may match primary name or ANY occurrence path.
+    /// - After dropping occurrences matching ExcludePath terms, at least 2 occurrences must remain.
+    pub fn matches_filter(&self, terms: &[DuplicateFilterTerm]) -> bool {
+        self.filtered_occurrences(terms).is_some()
+    }
+
+    /// Evaluates filter terms against this group.
+    /// Returns Some(valid_occurrences_indices) if the group survives the filter (with >= 2 occurrences),
+    /// or None if the group is excluded.
+    pub fn filtered_occurrences(&self, terms: &[DuplicateFilterTerm]) -> Option<Vec<usize>> {
+        if terms.is_empty() {
+            return Some((0..self.occurrences.len()).collect());
+        }
+
+        let prim_lower = self.primary_name.to_lowercase();
+
+        // 1. Check ExcludeGroup: if any ExcludeGroup term matches primary name or ANY occurrence path, reject group
+        for term in terms {
+            if let DuplicateFilterTerm::ExcludeGroup(ex) = term {
+                if prim_lower.contains(ex.as_str()) {
+                    return None;
+                }
+                if self.occurrences.iter().any(|o| o.path.to_string_lossy().to_lowercase().contains(ex.as_str())) {
+                    return None;
+                }
+            }
+        }
+
+        // 2. Filter occurrences by ExcludePath
+        let mut surviving_indices: Vec<usize> = Vec::new();
+        for (idx, occ) in self.occurrences.iter().enumerate() {
+            let path_lower = occ.path.to_string_lossy().to_lowercase();
+            let mut excluded = false;
+            for term in terms {
+                if let DuplicateFilterTerm::ExcludePath(ex) = term {
+                    if path_lower.contains(ex.as_str()) {
+                        excluded = true;
+                        break;
+                    }
+                }
+            }
+            if !excluded {
+                surviving_indices.push(idx);
+            }
+        }
+
+        // Must still have at least 2 duplicate copies remaining
+        if surviving_indices.len() < 2 {
+            return None;
+        }
+
+        // 3. Check Include terms: every Include term must be satisfied by primary name or surviving paths
+        for term in terms {
+            if let DuplicateFilterTerm::Include(inc) = term {
+                let matches_primary = prim_lower.contains(inc.as_str());
+                let matches_any_surviving = surviving_indices.iter().any(|&i| {
+                    self.occurrences[i].path.to_string_lossy().to_lowercase().contains(inc.as_str())
+                });
+                if !matches_primary && !matches_any_surviving {
+                    return None;
+                }
+            }
+        }
+
+        Some(surviving_indices)
     }
 
     /// Toggles the group-level checkbox.
@@ -175,9 +235,62 @@ pub enum DuplicateMessage {
 }
 
 
-/// Splits the duplicate filter text into lowercase terms; a group must match all of them.
-pub fn filter_terms(text: &str) -> Vec<String> {
-    text.split_whitespace().map(str::to_lowercase).collect()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuplicateFilterTerm {
+    /// Positive term: must match either primary name or at least one occurrence path.
+    Include(String),
+    /// Single minus -term: if this matches primary name or ANY occurrence path, exclude entire group.
+    ExcludeGroup(String),
+    /// Double minus --term: filter out individual occurrence paths matching this term.
+    ExcludePath(String),
+}
+
+/// Parses the duplicate filter text into structured filter terms.
+/// Handles -term (exclude group), --term (exclude individual occurrence path),
+/// and \- / -\- / --\- escaping.
+pub fn filter_terms(text: &str) -> Vec<DuplicateFilterTerm> {
+    let mut terms = Vec::new();
+    for token in text.split_whitespace() {
+        if token.is_empty() {
+            continue;
+        }
+
+        if let Some(rest) = token.strip_prefix("--") {
+            if rest.is_empty() {
+                // Lone --: treat as literal -- search
+                terms.push(DuplicateFilterTerm::Include("--".to_string()));
+            } else if let Some(escaped) = rest.strip_prefix('\\') {
+                // --\-term: search for literal -term in path exclusion
+                terms.push(DuplicateFilterTerm::ExcludePath(escaped.to_lowercase()));
+            } else if rest.starts_with('-') {
+                // --- or ---something: shortcut for --\-...
+                let query = rest.strip_prefix('-').unwrap_or("").to_lowercase();
+                if query.is_empty() {
+                    terms.push(DuplicateFilterTerm::ExcludePath("-".to_string()));
+                } else {
+                    terms.push(DuplicateFilterTerm::ExcludePath(format!("-{query}")));
+                }
+            } else {
+                terms.push(DuplicateFilterTerm::ExcludePath(rest.to_lowercase()));
+            }
+        } else if let Some(rest) = token.strip_prefix('-') {
+            if rest.is_empty() {
+                // Lone -: treat as literal - search
+                terms.push(DuplicateFilterTerm::Include("-".to_string()));
+            } else if let Some(escaped) = rest.strip_prefix('\\') {
+                // -\-something: exclude group that contains literal -something
+                terms.push(DuplicateFilterTerm::ExcludeGroup(escaped.to_lowercase()));
+            } else {
+                terms.push(DuplicateFilterTerm::ExcludeGroup(rest.to_lowercase()));
+            }
+        } else if let Some(escaped) = token.strip_prefix('\\') {
+            // Escaped character like \-foo
+            terms.push(DuplicateFilterTerm::Include(escaped.to_lowercase()));
+        } else {
+            terms.push(DuplicateFilterTerm::Include(token.to_lowercase()));
+        }
+    }
+    terms
 }
 
 fn subpartition_by<T, K, F>(groups: Vec<Vec<T>>, key_fn: F) -> Vec<Vec<T>>
@@ -487,12 +600,65 @@ mod tests {
             primary_name: "a.jpg".into(),
             file_size: 10,
             is_group_selected: false,
-            occurrences: vec![occ("C:\\Photos\\Holiday\\a.jpg"), occ("C:\\Backup\\a.jpg")],
+            occurrences: vec![
+                occ("C:\\Photos\\Holiday\\a.jpg"),
+                occ("C:\\Backup\\a.jpg"),
+                occ("C:\\Work\\Project\\a.jpg"),
+            ],
         };
+
+        // Basic inclusion
         assert!(cluster.matches_filter(&filter_terms("")));
         assert!(cluster.matches_filter(&filter_terms(".JPG")));
         assert!(cluster.matches_filter(&filter_terms("holiday backup")));
         assert!(!cluster.matches_filter(&filter_terms("holiday .png")));
+
+        // Single minus (-): Group exclusion (Variante A)
+        assert!(!cluster.matches_filter(&filter_terms("-backup")));
+        assert!(cluster.matches_filter(&filter_terms("-synology")));
+
+        // Double minus (--): Path exclusion (Variante B)
+        // If we exclude backup, 2 occurrences remain (Photos, Work) -> matches!
+        assert!(cluster.matches_filter(&filter_terms("--backup")));
+        let filtered = cluster.filtered_occurrences(&filter_terms("--backup")).unwrap();
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered, vec![0, 2]);
+
+        // If we exclude both backup and work, only 1 occurrence remains -> group hidden!
+        assert!(!cluster.matches_filter(&filter_terms("--backup --work")));
+
+        // Escaped literal minus (\-)
+        let dash_cluster = DuplicateCluster {
+            cluster_id: "c2".into(),
+            primary_name: "doc-v1.txt".into(),
+            file_size: 10,
+            is_group_selected: false,
+            occurrences: vec![occ("C:\\A\\doc-v1.txt"), occ("C:\\B\\doc-v1.txt")],
+        };
+        assert!(dash_cluster.matches_filter(&filter_terms(r"\-")));
+        assert!(dash_cluster.matches_filter(&filter_terms(r"\-v1")));
+        assert!(!dash_cluster.matches_filter(&filter_terms(r"\-v2")));
+
+        // Exclude group with literal dash (-\-)
+        assert!(!dash_cluster.matches_filter(&filter_terms(r"-\-v1")));
+        assert!(dash_cluster.matches_filter(&filter_terms(r"-\-v2")));
+
+        // Exclude path with shortcut (--- or --\-)
+        let three_dash_cluster = DuplicateCluster {
+            cluster_id: "c3".into(),
+            primary_name: "item.txt".into(),
+            file_size: 10,
+            is_group_selected: false,
+            occurrences: vec![
+                occ("C:\\A\\item-old.txt"),
+                occ("C:\\B\\item.txt"),
+                occ("C:\\C\\item.txt"),
+            ],
+        };
+        // '---' excludes paths with '-' (i.e. C:\A\item-old.txt). 2 remain -> visible
+        assert!(three_dash_cluster.matches_filter(&filter_terms("---")));
+        let rem = three_dash_cluster.filtered_occurrences(&filter_terms("---")).unwrap();
+        assert_eq!(rem, vec![1, 2]);
     }
 
     #[test]

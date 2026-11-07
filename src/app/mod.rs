@@ -122,7 +122,7 @@ pub struct FreeDataDietApp {
 pub(super) fn cluster_visible(
     cluster: &DuplicateCluster,
     ignored: &std::collections::HashSet<String>,
-    terms: &[String],
+    terms: &[crate::duplicate::DuplicateFilterTerm],
 ) -> bool {
     !ignored.contains(&cluster.cluster_id) && cluster.matches_filter(terms)
 }
@@ -478,8 +478,37 @@ impl FreeDataDietApp {
                         _ => {}
                     }
                 }
-                if search_filter && !e.name.to_lowercase().contains(&search_query) {
-                    return false;
+                if search_filter {
+                    let name_lower = e.name.to_lowercase();
+                    for token in search_query.split_whitespace() {
+                        if token.is_empty() {
+                            continue;
+                        }
+                        if let Some(rest) = token.strip_prefix('-') {
+                            if rest.is_empty() {
+                                // Lone '-': literal '-' search
+                                if !name_lower.contains('-') {
+                                    return false;
+                                }
+                            } else if let Some(escaped) = rest.strip_prefix('\\') {
+                                // '-\-something': must NOT contain '-something'
+                                if name_lower.contains(escaped) {
+                                    return false;
+                                }
+                            } else {
+                                // '-something': must NOT contain 'something'
+                                if name_lower.contains(rest) {
+                                    return false;
+                                }
+                            }
+                        } else if let Some(escaped) = token.strip_prefix('\\') {
+                            if !name_lower.contains(escaped) {
+                                return false;
+                            }
+                        } else if !name_lower.contains(token) {
+                            return false;
+                        }
+                    }
                 }
                 true
             })

@@ -82,9 +82,9 @@ impl FreeDataDietApp {
             ui.label("Filter:");
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.duplicate_filter)
-                    .hint_text("file name, extension or folder (e.g. .jpg holiday)")
+                    .hint_text("Filter (e.g. .jpg -synology --draft)")
                     .desired_width((ui.available_width() - 64.0).max(80.0)),
-            );
+            ).on_hover_text("Filter duplicate items:\n  word : group must contain 'word'\n  -word : exclude entire group containing 'word'\n  --word : exclude specific path containing 'word'\n  \\- : search for literal '-' character\n  --- : exclude paths containing '-'");
             if std::mem::take(&mut self.focus_duplicate_filter) {
                 edit.request_focus();
             }
@@ -394,12 +394,15 @@ impl FreeDataDietApp {
             self.cached_duplicate_flat_rows.clear();
             let terms = filter_terms(&self.duplicate_filter);
             for c_idx in 0..self.duplicate_clusters.len() {
-                if !cluster_visible(&self.duplicate_clusters[c_idx], &self.ignored_cluster_ids, &terms) {
+                let cluster = &self.duplicate_clusters[c_idx];
+                if self.ignored_cluster_ids.contains(&cluster.cluster_id) {
                     continue;
                 }
-                self.cached_duplicate_flat_rows.push(DuplicateRowItem::Header(c_idx));
-                for o_idx in 0..self.duplicate_clusters[c_idx].occurrences.len() {
-                    self.cached_duplicate_flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
+                if let Some(valid_indices) = cluster.filtered_occurrences(&terms) {
+                    self.cached_duplicate_flat_rows.push(DuplicateRowItem::Header(c_idx));
+                    for o_idx in valid_indices {
+                        self.cached_duplicate_flat_rows.push(DuplicateRowItem::Occurrence(c_idx, o_idx));
+                    }
                 }
             }
             self.duplicate_flat_rows_dirty = false;
