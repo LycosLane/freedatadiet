@@ -26,7 +26,7 @@ impl FreeDataDietApp {
             if !cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
                 continue;
             }
-            let cluster_paths = cluster.deletable_paths();
+            let cluster_paths = cluster.filtered_deletable_paths(&terms);
             total_size += cluster_paths.len() as u64 * cluster.file_size;
             paths.extend(cluster_paths);
         }
@@ -159,7 +159,7 @@ impl FreeDataDietApp {
                 let terms = filter_terms(&self.duplicate_filter);
                 for cluster in &mut self.duplicate_clusters {
                     if cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
-                        cluster.keep_one(DuplicateRulePreference::KeepFirst);
+                        cluster.keep_one_filtered(DuplicateRulePreference::KeepFirst, &terms);
                     }
                 }
                 self.safety_warning = None;
@@ -390,7 +390,7 @@ impl FreeDataDietApp {
         }
 
         // Build or reuse cached flat row mapping for virtualized rendering (skipping ignored clusters)
-        if self.duplicate_flat_rows_dirty || self.cached_duplicate_flat_rows.is_empty() {
+        if self.duplicate_flat_rows_dirty {
             self.cached_duplicate_flat_rows.clear();
             let terms = filter_terms(&self.duplicate_filter);
             for c_idx in 0..self.duplicate_clusters.len() {
@@ -407,7 +407,7 @@ impl FreeDataDietApp {
             }
             self.duplicate_flat_rows_dirty = false;
         }
-        let flat_rows = self.cached_duplicate_flat_rows.clone();
+        let flat_rows = std::mem::take(&mut self.cached_duplicate_flat_rows);
         let total_rows = flat_rows.len();
         self.selected_duplicate_row_idx = self.selected_duplicate_row_idx.min(total_rows.saturating_sub(1));
 
@@ -448,9 +448,9 @@ impl FreeDataDietApp {
                     DuplicateRowItem::Header(c_idx) => {
                         let cluster = &mut self.duplicate_clusters[c_idx];
                         let new_val = !cluster.is_group_selected;
-                        cluster.set_group_selected(new_val);
+                        let terms = filter_terms(&self.duplicate_filter);
+                        cluster.set_group_selected_filtered(new_val, &terms);
                         stats_dirty = true;
-            self.duplicate_flat_rows_dirty = true;
                     }
                     DuplicateRowItem::Occurrence(c_idx, o_idx) => {
                         let cluster = &mut self.duplicate_clusters[c_idx];
@@ -461,7 +461,6 @@ impl FreeDataDietApp {
                             cluster.set_copy_selected(&occ_path, new_val);
                             stats_dirty = true;
                             manual_toggled = Some((occ_path.clone(), new_val));
-                            self.duplicate_flat_rows_dirty = true;
                             if new_val && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                 let first_p = cluster.occurrences.first().map(|o| o.path.clone());
                                 new_warning = Some((
@@ -538,9 +537,8 @@ impl FreeDataDietApp {
                                         .on_hover_text("Select file name to authorize deleting all occurrences of this file")
                                         .changed()
                                     {
-                                        cluster.set_group_selected(group_sel);
+                                        cluster.set_group_selected_filtered(group_sel, &terms);
                                         stats_dirty = true;
-            self.duplicate_flat_rows_dirty = true;
                                     }
 
                                     ui.label(
@@ -583,9 +581,8 @@ impl FreeDataDietApp {
                                             .on_hover_text("Selects all copies for deletion except the first occurrence")
                                             .clicked()
                                         {
-                                            cluster.keep_one(DuplicateRulePreference::KeepFirst);
+                                            cluster.keep_one_filtered(DuplicateRulePreference::KeepFirst, &terms);
                                             stats_dirty = true;
-            self.duplicate_flat_rows_dirty = true;
                                         }
                                     });
                                 });
@@ -624,7 +621,6 @@ impl FreeDataDietApp {
                                         cluster.set_copy_selected(&occ_path, copy_checked);
                                         manual_toggled = Some((occ_path.clone(), copy_checked));
                                         stats_dirty = true;
-            self.duplicate_flat_rows_dirty = true;
                                         if copy_checked && cluster.are_all_copies_selected() && !cluster.is_group_selected {
                                             let first_p = cluster.occurrences.first().map(|o| o.path.clone());
                                             new_warning = Some((
@@ -722,5 +718,7 @@ impl FreeDataDietApp {
         if let Some(menu) = open_context_menu {
             self.active_context_menu = Some(menu);
         }
+
+        self.cached_duplicate_flat_rows = flat_rows;
     }
 }

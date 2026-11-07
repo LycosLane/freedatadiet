@@ -1,3 +1,4 @@
+pub mod context_menu;
 pub mod duplicates_view;
 pub mod modals;
 pub mod shortcuts_dialog;
@@ -7,8 +8,10 @@ pub mod sidebar_settings;
 pub mod sorting;
 pub mod status_bar;
 pub mod table;
+pub mod table_nav;
 pub mod top_bar;
 
+pub use self::context_menu::ActiveContextMenu;
 pub use self::sorting::get_type_badge;
 
 use std::path::PathBuf;
@@ -26,7 +29,7 @@ use crate::model::{DriveInfo, FileEntry};
 use crate::platform;
 use crate::scanner::{start_scan, ScanMessage, ScanSummary, ScannerHandle};
 
-use self::modals::{ActiveContextMenu, DeleteConfirmState, DeleteModalFocus};
+use self::modals::{DeleteConfirmState, DeleteModalFocus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivePanelFocus {
@@ -390,11 +393,17 @@ impl FreeDataDietApp {
             if !cluster_visible(cluster, &self.ignored_cluster_ids, &terms) {
                 continue;
             }
-            total_wasted += cluster.wasted_bytes();
-            if cluster.are_all_copies_selected() && !cluster.is_group_selected {
-                blocked_count += 1;
+            total_wasted += cluster.filtered_wasted_bytes(&terms);
+            let paths = cluster.filtered_deletable_paths(&terms);
+            if paths.is_empty() {
+                if let Some(valid_indices) = cluster.filtered_occurrences(&terms) {
+                    let all_valid_selected = !valid_indices.is_empty()
+                        && valid_indices.iter().all(|&idx| cluster.occurrences[idx].is_selected);
+                    if all_valid_selected && !cluster.is_group_selected {
+                        blocked_count += 1;
+                    }
+                }
             } else {
-                let paths = cluster.deletable_paths();
                 eligible_count += paths.len();
                 eligible_bytes += paths.len() as u64 * cluster.file_size;
             }
@@ -435,7 +444,7 @@ impl FreeDataDietApp {
                 continue;
             }
 
-            cluster.keep_one(pref);
+            cluster.keep_one_filtered(pref, &terms);
         }
         self.safety_warning = None;
         self.active_suggestion = None;
@@ -492,7 +501,7 @@ impl FreeDataDietApp {
                                 }
                             } else if let Some(escaped) = rest.strip_prefix('\\') {
                                 // '-\-something': must NOT contain '-something'
-                                if name_lower.contains(escaped) {
+                                if !escaped.is_empty() && name_lower.contains(escaped) {
                                     return false;
                                 }
                             } else {
@@ -502,7 +511,7 @@ impl FreeDataDietApp {
                                 }
                             }
                         } else if let Some(escaped) = token.strip_prefix('\\') {
-                            if !name_lower.contains(escaped) {
+                            if !escaped.is_empty() && !name_lower.contains(escaped) {
                                 return false;
                             }
                         } else if !name_lower.contains(token) {

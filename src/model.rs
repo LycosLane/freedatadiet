@@ -214,10 +214,14 @@ pub fn is_system_path(path: &Path) -> bool {
         // Multi-drive protection for secondary installations, 8.3 aliases, or drive-level critical folders
         if s.contains("\\system volume information")
             || s.contains("\\$recycle.bin")
-            || s.contains("\\boot")
-            || s.contains("\\efi")
-            || s.contains("\\recovery")
-            || s.contains("\\$winreagent")
+            || s.ends_with("\\boot")
+            || s.contains("\\boot\\")
+            || s.ends_with("\\efi")
+            || s.contains("\\efi\\")
+            || s.ends_with("\\recovery")
+            || s.contains("\\recovery\\")
+            || s.ends_with("\\$winreagent")
+            || s.contains("\\$winreagent\\")
             || s.contains("\\progra~1")
             || s.contains("\\progra~2")
             || s.contains("\\window~1")
@@ -371,5 +375,11 @@ mod tests {
         let pagefile = Path::new("C:\\pagefile.sys");
         let (_, is_sys_page, _, _) = detect_path_attributes(pagefile, "pagefile.sys");
         assert!(is_sys_page, "pagefile.sys must be recognized as an OS system file");
+
+        // Verify substring names like bootcamp or recovery_plan are not falsely flagged
+        let user_file = Path::new("C:\\Users\\User\\bootcamp.iso");
+        assert!(!is_system_path(user_file));
+        let recovery_doc = Path::new("D:\\Documents\\recovery_plan.docx");
+        assert!(!is_system_path(recovery_doc));
     }
 }
