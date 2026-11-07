@@ -124,8 +124,8 @@ fn pattern_editor(ui: &mut egui::Ui, label: &str, text: &mut String, default: &s
 }
 
 impl FreeDataDietApp {    /// Logarithmic "skip files smaller than" slider plus quick presets.
-    /// The value is applied on release; returns true when it changed.
-    fn min_size_slider(&mut self, ui: &mut egui::Ui) -> bool {
+    /// The value is applied on release.
+    fn min_size_slider(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Skip files smaller than (type a value like 14 MB):").weak().small());
         let draft_id = ui.scope_id().with("dup_min_size_draft");
         let mut kb = ui
@@ -158,9 +158,10 @@ impl FreeDataDietApp {    /// Logarithmic "skip files smaller than" slider plus 
         match new_kb {
             Some(kb) if kb != self.config.duplicate_min_size_kb => {
                 self.config.duplicate_min_size_kb = kb;
-                true
+                self.save_config();
+                self.on_min_size_changed();
             }
-            _ => false,
+            _ => {}
         }
     }
     pub(super) fn render_sidebar_settings(
@@ -343,9 +344,7 @@ impl FreeDataDietApp {    /// Logarithmic "skip files smaller than" slider plus 
                 }
             }
 
-            if self.min_size_slider(ui) {
-                crit_changed = true;
-            }
+            self.min_size_slider(ui);
             if crit_changed {
                 self.save_config();
                 *recompute_dups = true;

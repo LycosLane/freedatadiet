@@ -57,6 +57,8 @@ pub struct FreeDataDietApp {
     pub(super) cancel_duplicate_hashing: Arc<AtomicBool>,
     pub(super) is_finding_duplicates: bool,
     pub(super) duplicate_started: Instant,
+    /// Minimum file size (KB) the current duplicate results were computed with.
+    pub(super) duplicate_computed_min_kb: u64,
     pub(super) duplicate_duration: Option<Duration>,
     pub(super) duplicate_progress_text: String,
     pub(super) duplicate_receiver: Option<std::sync::mpsc::Receiver<crate::duplicate::DuplicateMessage>>,
@@ -151,6 +153,7 @@ impl FreeDataDietApp {
             cancel_duplicate_hashing: Arc::new(AtomicBool::new(false)),
             is_finding_duplicates: false,
             duplicate_started: Instant::now(),
+            duplicate_computed_min_kb: 0,
             duplicate_duration: None,
             duplicate_progress_text: String::new(),
             duplicate_receiver: None,
@@ -305,6 +308,7 @@ impl FreeDataDietApp {
             .map(|l| l.path.clone())
             .collect();
 
+        self.duplicate_computed_min_kb = self.config.duplicate_min_size_kb;
         let min_size = self.config.duplicate_min_size_kb * 1024;
         let entries_clone: Vec<FileEntry> = self
             .entries
@@ -324,6 +328,32 @@ impl FreeDataDietApp {
         self.duplicate_receiver = Some(rx);
     }
 
+    /// Reacts to a changed minimum size. Raising it only trims existing results (no
+    /// re-hashing, a running search keeps going); lowering it needs new files, so it restarts.
+    pub(super) fn on_min_size_changed(&mut self) {
+        if self.is_scanning {
+            return; // the search has not started yet and will read the new value
+        }
+        let raised = self.config.duplicate_min_size_kb > self.duplicate_computed_min_kb;
+        if raised && self.config.duplicate_criteria.match_size {
+            if !self.is_finding_duplicates {
+                self.trim_clusters_to_min_size();
+                self.recompute_duplicate_stats();
+                self.duplicate_flat_rows_dirty = true;
+            }
+        } else {
+            self.compute_duplicates();
+        }
+    }
+
+    /// Drops groups whose files are below the current minimum size.
+    fn trim_clusters_to_min_size(&mut self) {
+        if self.config.duplicate_criteria.match_size {
+            let min_bytes = self.config.duplicate_min_size_kb * 1024;
+            self.duplicate_clusters.retain(|c| c.file_size >= min_bytes);
+        }
+        self.duplicate_computed_min_kb = self.config.duplicate_min_size_kb;
+    }
     pub(super) fn recompute_duplicate_stats(&mut self) {
         let mut total_wasted = 0u64;
         let mut eligible_count = 0usize;
@@ -589,6 +619,7 @@ impl FreeDataDietApp {
                                 }
                                 crate::duplicate::DuplicateMessage::Completed(clusters) => {
                                     self.duplicate_clusters = clusters;
+                                    self.trim_clusters_to_min_size();
                                     self.sort_duplicate_clusters();
                                     self.is_finding_duplicates = false;
                                     self.duplicate_duration = Some(self.duplicate_started.elapsed());
