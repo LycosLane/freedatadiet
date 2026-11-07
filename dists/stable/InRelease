@@ -8,29 +8,29 @@ Codename: stable
 Architectures: amd64
 Components: main
 Description: Official APT repository for FreeDataDiet disk usage analyzer
-Date: Sat, 24 Oct 2026 10:00:41 +0000
+Date: Sat, 07 Nov 2026 19:21:40 +0000
 MD5Sum:
- 0546b60e56d20c8d9d52ff59aca02dba 1659 main/binary-amd64/Packages
- 857eb4d0ca9f628c443d27e1b338744a 679 main/binary-amd64/Packages.gz
+ b94bd35e1666387c8a52d7733808a402 2496 main/binary-amd64/Packages
+ 9f3190a6fd28d530bd70b8748db56af5 860 main/binary-amd64/Packages.gz
 SHA1:
- cae51488c0863ed7480c5bffcbe94a1406d76a94 1659 main/binary-amd64/Packages
- e0762e3b2b60cd5dfdc272ff232163a58d3bb296 679 main/binary-amd64/Packages.gz
+ 54ce42234ba7ce756225c67798561d48da32d2c7 2496 main/binary-amd64/Packages
+ 325a82c751b4f5e4dbbd993d5e3dcdd12a26a6bf 860 main/binary-amd64/Packages.gz
 SHA256:
- ccf6beb7ae449a4e96d0ac89414115a3bc9900d182b366c9271b3adc6403d469 1659 main/binary-amd64/Packages
- 1f0357c40e4fb4a9ab8f42ab0b07b6ec1b033dd3d2dd21fb6fc2bcce472bf8d8 679 main/binary-amd64/Packages.gz
+ 67da8849296841dcceb1a64716aaf633622f7aa9b0efe4cb94aaba0bc98bc6c0 2496 main/binary-amd64/Packages
+ b0992ed02d4f8e9dee998054932ba6f02314ec9533627d8159dd0f7620816dac 860 main/binary-amd64/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEEd76qBLCS5RlPl3Klcf9s6Gvt9zMFAmrcgckACgkQcf9s6Gvt
-9zMwoxAAr8WglY4CYW/G0uVaAbjVyM8m/tuu1yDln6xQsO7GVTWq+D6CVHXhWAwv
-UJhmKaU9ocfXvnljf/P/UThS7+L9UfDwcImiqB9hqFaMMV8JaBtaa3kD2lXK+ttS
-14QlBD/uje+b182fQLUQSbK55oDkNhDabfR8rz1gc1AUG3ZAO9MR86Y/sxGUUwRT
-sacycTDAZpu8U5wkb8h4hKUrdfHHDEPowSp1u2SsW/zrB7PZaDemxnuYDEjKtrN+
-fG/9BTUXxgwXUKZz8nTYhYudLrweNVFrveSyAo3rsQw+ySH2YGCs+/W4iY4y9jky
-tnkyNo51FPzOFHpc+Js29jTrcyRI9QKSHg4HS+mCdM81cDcxUGmbsnMZEYHoEXgY
-GuUfl1iWuVmSec5+mMN2zREaIDdzgtLMVc/4BU5hPoHb7j04By6Wb9ybJrssfJPG
-nyKvt0Sa6vQMu+QI02AQ11seAQjZNwjNWprpf6b/13DIkG9Cr0/uWygsfeY1Tlvg
-bTYqHfW2V98QpSFq42OR2szmLNyA2q05kma4t8PHe07mczKtYTO9/XAAERzDpb7P
-YJ9eWdoxEYjnD+a2C00i5i8ZEzTZJngGO5qxEcF0Liut/3HpgZYSFskXzvU6RTCi
-fm/N4/1kMfjOYfjsC4R8VbLQpREMZWfiaOzoirD6yIS8CeDFyiU=
-=xfTN
+iQIzBAEBCgAdFiEEd76qBLCS5RlPl3Klcf9s6Gvt9zMFAmrvekQACgkQcf9s6Gvt
+9zMDfQ/+OrRCJBAQOwXmmnQjCXFFyoDrej5KM17v9w53dW1lfmcy4rHmfwPeJnIi
+yV3ujPdF3scshmB42ofGfxe2a3BYuDzv6qWNxA+tgJ606xxiRuw1S9swz1jPWzAx
+AFzpGmfGZWjRIdr8GtjOcSfbfOQa1xspaYOUcYPhMa045FLFNpHyNUHflYBxCU/3
+iUK1Ua5dnDgy5iaUmk7S/qjCHhYCmxFNOUeUioml49kjZBFgqoRjjitmohwWqTUn
+wZnh3LcTGWQ4f2fkFFS0iNdJxdjZmg08FCyI9YR8E/jSQYIoln+uDMzvgFrg6dnG
+S5WeA4dtBXo2VSPbXw4WrdOPdQjRhCMxcDeuLh7kPQMpMVlsfFXUR7jjqNJDorqQ
+1tlkqzAfwzUDyjHtVX2NiCTf+mfNsQZDeq1w4+1R/krN2L2s+/MbP+3GVnN6F/3j
+vrvQMwE9r+092XiOn9ITdLq1H1i39QJnxQjgGoTRIxQJ90brEhek0MNoOkth5dJs
+kE4ADoDCvptcwUL56k4RouoGWdBBWXLiDpA5jSCUQP/4e114QKN7jF/ELPpGGM1A
+36c40sCYGRemgIsJOht1QvW/NSNLEtic4yj0XBi1FvhfHaoQqnpn/MQaGnFCwtsz
+/lCL6ez1+AoWuZ99GqTbLpeBbxqebprEK6UH5GgcmRFb64abHBY=
+=/40I
 -----END PGP SIGNATURE-----

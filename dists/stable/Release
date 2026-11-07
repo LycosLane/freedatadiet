@@ -5,13 +5,13 @@ Codename: stable
 Architectures: amd64
 Components: main
 Description: Official APT repository for FreeDataDiet disk usage analyzer
-Date: Sat, 24 Oct 2026 10:00:41 +0000
+Date: Sat, 07 Nov 2026 19:21:40 +0000
 MD5Sum:
- 0546b60e56d20c8d9d52ff59aca02dba 1659 main/binary-amd64/Packages
- 857eb4d0ca9f628c443d27e1b338744a 679 main/binary-amd64/Packages.gz
+ b94bd35e1666387c8a52d7733808a402 2496 main/binary-amd64/Packages
+ 9f3190a6fd28d530bd70b8748db56af5 860 main/binary-amd64/Packages.gz
 SHA1:
- cae51488c0863ed7480c5bffcbe94a1406d76a94 1659 main/binary-amd64/Packages
- e0762e3b2b60cd5dfdc272ff232163a58d3bb296 679 main/binary-amd64/Packages.gz
+ 54ce42234ba7ce756225c67798561d48da32d2c7 2496 main/binary-amd64/Packages
+ 325a82c751b4f5e4dbbd993d5e3dcdd12a26a6bf 860 main/binary-amd64/Packages.gz
 SHA256:
- ccf6beb7ae449a4e96d0ac89414115a3bc9900d182b366c9271b3adc6403d469 1659 main/binary-amd64/Packages
- 1f0357c40e4fb4a9ab8f42ab0b07b6ec1b033dd3d2dd21fb6fc2bcce472bf8d8 679 main/binary-amd64/Packages.gz
+ 67da8849296841dcceb1a64716aaf633622f7aa9b0efe4cb94aaba0bc98bc6c0 2496 main/binary-amd64/Packages
+ b0992ed02d4f8e9dee998054932ba6f02314ec9533627d8159dd0f7620816dac 860 main/binary-amd64/Packages.gz

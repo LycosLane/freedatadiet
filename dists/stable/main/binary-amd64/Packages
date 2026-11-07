@@ -21,6 +21,28 @@ SHA256: 9fe9e58436b675710d2926632cae233deff91d0b824ca52dd83e625a1aa6a5ed
 
 
 Package: freedatadiet
+Version: 1.12.0-1
+Architecture: amd64
+Homepage: https://github.com/LycosLane/FreeDataDiet
+Section: utils
+Priority: optional
+Maintainer: LycosLane <lycos.lane@gmail.com>
+Installed-Size: 10027
+Depends: libc6 (>= 2.35)
+Description: FreeDataDiet - Put your storage on a diet. A minimalist, fast cross-platform
+ disk usage analyzer.
+ FreeDataDiet is a fast, lightweight cross-platform disk usage analyzer written
+ in native Rust with egui graphics. Quickly scan drives and directories to
+ visualize storage consumption and manage disk space with no installer required
+ and no subscriptions.
+Filename: pool/main/freedatadiet_1.12.0-1_amd64.deb
+Size: 3033192
+MD5sum: 6c92548d7f001b7352176ca37c8d004c
+SHA1: 57598c246b809e36563af7df52243a8c66bd99fe
+SHA256: 3ae2fc7aa99f657e4cf7caa0e6b67241754df7f371ed04106455cd121f041af8
+
+
+Package: freedatadiet
 Version: 1.2.0-1
 Architecture: amd64
 Homepage: https://github.com/LycosLane/FreeDataDiet
